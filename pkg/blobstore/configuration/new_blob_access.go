@@ -378,11 +378,13 @@ func newNestedBlobAccessBare(configuration *pb.BlobAccessConfiguration, creator 
 
 		locationBlobMap := local.NewOldCurrentNewLocationBlobMap(
 			blockList,
+			local.NewImmutableBlockListGrowingPolicy(
+				int(backend.Local.CurrentBlocks),
+				int(backend.Local.NewBlocks)),
 			util.DefaultErrorLogger,
 			storageTypeName,
 			int64(sectorSizeBytes)*blockSectorCount,
 			int(backend.Local.OldBlocks),
-			int(backend.Local.CurrentBlocks),
 			int(backend.Local.NewBlocks),
 			initialBlockCount)
 
