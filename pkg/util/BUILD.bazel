@@ -30,7 +30,6 @@ go_test(
     ],
     embed = [":util"],
     deps = [
-	":util",
 	"//internal/mock",
         "//pkg/proto/configuration/auth",
         "//pkg/proto/configuration/bb_storage",
