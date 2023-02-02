@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"hash"
 	"io"
+	"log"
 
 	"github.com/buildbarn/bb-storage/pkg/digest"
 )
@@ -53,9 +54,11 @@ func (r *casValidatingChunkReader) maybeFinalize() error {
 		if err == io.EOF {
 			break
 		} else if err != nil {
+			log.Printf("casValidatingChunkReader: maybeFinalize err %v\n", err)
 			return err
 		}
 		if err := r.checkSize(len(chunk)); err != nil {
+			log.Printf("casValidatingChunkReader: maybeFinalize checkSize err %v\n", err)
 			return err
 		}
 	}
@@ -64,6 +67,7 @@ func (r *casValidatingChunkReader) maybeFinalize() error {
 	expectedChecksum := r.digest.GetHashBytes()
 	actualChecksum := r.hasher.Sum(nil)
 	if bytes.Compare(expectedChecksum, actualChecksum) != 0 {
+		log.Printf("casValidatingChunkReader: maybeFinalize expected checksum %v, actual checksum\n", expectedChecksum, actualChecksum)
 		return r.source.notifyCASHashMismatch(expectedChecksum, actualChecksum)
 	}
 	r.source.notifyDataValid()
@@ -81,10 +85,12 @@ func (r *casValidatingChunkReader) doRead() ([]byte, error) {
 		sizeBytes := r.digest.GetSizeBytes()
 		return nil, r.source.notifyCASSizeMismatch(sizeBytes, sizeBytes-r.bytesRemaining)
 	} else if err != nil {
+		log.Printf("casValidatingChunkReader: ret ChunkReader.Read err %v\n", err)
 		return nil, err
 	}
 
 	if err := r.checkSize(len(chunk)); err != nil {
+		log.Printf("casValidatingChunkReader: ret r.checkSize err %v\n", err)
 		return nil, err
 	}
 	r.hasher.Write(chunk)

@@ -1,6 +1,5 @@
 # gazelle:ignore
-
-load("@bazel_gomock//:gomock.bzl", "gomock")
+load("@io_bazel_rules_go//extras:gomock.bzl", "gomock")
 load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 gomock(
@@ -165,10 +164,19 @@ gomock(
 )
 
 gomock(
+    name = "authenticator",
+    out = "authenticator.go",
+    interfaces = [
+        "Authenticator",
+    ],
+    library = "//pkg/authenticator",
+    package = "mock",
+)
+
+gomock(
     name = "grpc",
     out = "grpc.go",
     interfaces = [
-        "Authenticator",
         "ClientDialer",
         "ClientFactory",
     ],
@@ -239,6 +247,7 @@ go_library(
     srcs = [
         ":aliases.go",
         ":auth.go",
+	":authenticator.go",
         ":blobstore.go",
         ":blobstore_local.go",
         ":blobstore_replication.go",

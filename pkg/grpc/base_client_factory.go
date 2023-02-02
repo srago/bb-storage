@@ -4,6 +4,7 @@ import (
 	"context"
 
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/grpc"
+	"github.com/buildbarn/bb-storage/pkg/bb_tls"
 	"github.com/buildbarn/bb-storage/pkg/util"
 
 	"google.golang.org/grpc"
@@ -42,7 +43,7 @@ func (cf baseClientFactory) NewClientFromConfiguration(config *configuration.Cli
 	streamInterceptors := cf.streamInterceptors
 
 	// Optional: TLS.
-	tlsConfig, err := util.NewTLSConfigFromClientConfiguration(config.Tls)
+	tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(config.Tls)
 	if err != nil {
 		return nil, util.StatusWrap(err, "Failed to create TLS configuration")
 	}

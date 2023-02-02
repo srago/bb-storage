@@ -1,11 +1,13 @@
-package grpc
+package authenticator
 
 import (
 	"context"
 	"crypto/x509"
+	"io/ioutil"
 
 	"github.com/buildbarn/bb-storage/pkg/clock"
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/grpc"
+	"github.com/buildbarn/bb-storage/pkg/util"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,12 +43,32 @@ func NewAuthenticatorFromConfiguration(policy *configuration.AuthenticationPolic
 		return NewDenyAuthenticator(policyKind.Deny), nil
 	case *configuration.AuthenticationPolicy_TlsClientCertificate:
 		clientCAs := x509.NewCertPool()
-		if !clientCAs.AppendCertsFromPEM([]byte(policyKind.TlsClientCertificate.ClientCertificateAuthorities)) {
-			return nil, status.Error(codes.InvalidArgument, "Failed to parse client certificate authorities")
+		var caPathName string
+		if util.IsPEMFile(policyKind.TlsClientCertificate.ClientCertificateAuthorities) {
+			// Read and parse the CA certificates file.
+			caPathName = policyKind.TlsClientCertificate.ClientCertificateAuthorities
+			b, err := ioutil.ReadFile(caPathName)
+			if err != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "Can't read CA certs: %v", err)
+			}
+			if !clientCAs.AppendCertsFromPEM(b) {
+				return nil, status.Error(codes.InvalidArgument, "Invalid server certificate authorities")
+			}
+		} else {
+			if !clientCAs.AppendCertsFromPEM([]byte(policyKind.TlsClientCertificate.ClientCertificateAuthorities)) {
+				return nil, status.Error(codes.InvalidArgument, "Failed to parse client certificate authorities")
+			}
+		}
+		// If we're using mTLS, use the allow authenticator instead, because the TLS handshake will take care of
+		// validating the client's identity.
+		if policyKind.TlsClientCertificate.Spiffe != nil {
+			return AllowAuthenticator, nil
 		}
 		return NewTLSClientCertificateAuthenticator(
 			clientCAs,
-			clock.SystemClock), nil
+			clock.SystemClock,
+			policyKind.TlsClientCertificate.Spiffe,
+			caPathName), nil
 	default:
 		return nil, status.Error(codes.InvalidArgument, "Configuration did not contain an authentication policy type")
 	}

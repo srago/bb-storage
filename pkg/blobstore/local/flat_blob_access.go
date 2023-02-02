@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
@@ -135,6 +136,7 @@ func (ba *flatBlobAccess) Get(ctx context.Context, blobDigest digest.Digest) buf
 func (ba *flatBlobAccess) Put(ctx context.Context, blobDigest digest.Digest, b buffer.Buffer) error {
 	sizeBytes, err := b.GetSizeBytes()
 	if err != nil {
+		log.Printf("local Put: getSizeBytes failed: %v\n", err)
 		b.Discard()
 		return err
 	}
@@ -144,6 +146,7 @@ func (ba *flatBlobAccess) Put(ctx context.Context, blobDigest digest.Digest, b b
 	putWriter, err := ba.keyBlobMap.Put(sizeBytes)
 	ba.lock.Unlock()
 	if err != nil {
+		log.Printf("local Put: keyBlobMap.Put failed: %v\n", err)
 		b.Discard()
 		return err
 	}

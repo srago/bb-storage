@@ -1,4 +1,4 @@
-package grpc_test
+package authenticator_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/buildbarn/bb-storage/internal/mock"
-	bb_grpc "github.com/buildbarn/bb-storage/pkg/grpc"
+	"github.com/buildbarn/bb-storage/pkg/authenticator"
 	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -93,7 +93,7 @@ func TestTLSClientCertificateAuthenticator(t *testing.T) {
 	clientCAs := x509.NewCertPool()
 	clientCAs.AddCert(certificateValid)
 	clock := mock.NewMockClock(ctrl)
-	authenticator := bb_grpc.NewTLSClientCertificateAuthenticator(clientCAs, clock)
+	authenticator := authenticator.NewTLSClientCertificateAuthenticator(clientCAs, clock, nil, "")
 
 	t.Run("NoGRPC", func(t *testing.T) {
 		// Authenticator is used outside of gRPC, meaning it cannot
@@ -126,7 +126,7 @@ func TestTLSClientCertificateAuthenticator(t *testing.T) {
 				}))
 		require.Equal(
 			t,
-			status.Error(codes.Unauthenticated, "Client provided no TLS client certificate"),
+			status.Error(codes.Unauthenticated, "Peer provided no TLS certificate"),
 			err)
 	})
 
@@ -147,7 +147,7 @@ func TestTLSClientCertificateAuthenticator(t *testing.T) {
 				}))
 		testutil.RequireEqualStatus(
 			t,
-			status.Error(codes.Unauthenticated, "Cannot validate TLS client certificate: x509: certificate signed by unknown authority"),
+			status.Error(codes.Unauthenticated, "Cannot validate TLS certificate: x509: certificate signed by unknown authority"),
 			err)
 	})
 
@@ -169,7 +169,7 @@ func TestTLSClientCertificateAuthenticator(t *testing.T) {
 				}))
 		require.Equal(
 			t,
-			status.Error(codes.Unauthenticated, "Cannot validate TLS client certificate: x509: certificate has expired or is not yet valid: current time 2023-11-14T22:13:20Z is after 2020-11-17T09:03:34Z"),
+			status.Error(codes.Unauthenticated, "Cannot validate TLS certificate: x509: certificate has expired or is not yet valid: current time 2023-11-14T22:13:20Z is after 2020-11-17T09:03:34Z"),
 			err)
 	})
 

@@ -3,6 +3,7 @@ package grpcclients
 import (
 	"context"
 	"io"
+	"log"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
@@ -96,6 +97,7 @@ func (ba *casBlobAccess) Put(ctx context.Context, digest digest.Digest, b buffer
 			}) != nil {
 				cancel()
 				_, err := client.CloseAndRecv()
+				log.Printf("bytestream client write: resourceName: %v, offset %d, write err %+v\n", resourceName, writeOffset, err)
 				return err
 			}
 			writeOffset += int64(len(data))
@@ -115,6 +117,7 @@ func (ba *casBlobAccess) Put(ctx context.Context, digest digest.Digest, b buffer
 			cancel()
 			return err
 		} else if err != nil {
+			log.Printf("bytestream client write: resourceName: %v, offset %d, read err %+v\n", resourceName, writeOffset, err)
 			cancel()
 			client.CloseAndRecv()
 			return err

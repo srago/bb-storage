@@ -2,6 +2,7 @@ package buffer_test
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"testing"
@@ -231,6 +232,25 @@ func TestNewCASBufferFromReaderToProto(t *testing.T) {
 			ToProto(&remoteexecution.ActionResult{}, len(exampleActionResultBytes))
 		require.NoError(t, err)
 		testutil.RequireEqualProto(t, &exampleActionResultMessage, actionResult)
+	})
+
+	t.Run("TwiceExact", func(t *testing.T) {
+		reader := ioutil.NopCloser(bytes.NewBuffer(exampleActionResultBytes))
+		dataIntegrityCallback := mock.NewMockDataIntegrityCallback(ctrl)
+		dataIntegrityCallback.EXPECT().Call(true)
+
+		buf := buffer.NewCASBufferFromReader(
+			exampleActionResultDigest,
+			reader,
+			buffer.BackendProvided(dataIntegrityCallback.Call))
+		buf1, buf2 := buf.CloneCopy(len(exampleActionResultBytes))
+		fmt.Printf("buf1 = %p, buf2 = %p\n", &buf1, &buf2)
+		ar1, err := buf1.ToProto(&remoteexecution.ActionResult{}, len(exampleActionResultBytes))
+		require.NoError(t, err)
+		testutil.RequireEqualProto(t, &exampleActionResultMessage, ar1)
+		ar2, err := buf2.ToProto(&remoteexecution.ActionResult{}, len(exampleActionResultBytes))
+		require.NoError(t, err)
+		testutil.RequireEqualProto(t, &exampleActionResultMessage, ar2)
 	})
 
 	t.Run("TooBig", func(t *testing.T) {

@@ -3,6 +3,7 @@ package grpcservers
 import (
 	"context"
 	"io"
+	"log"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
@@ -104,10 +105,12 @@ func (r *byteStreamWriteServerChunkReader) Close() {}
 func (s *byteStreamServer) Write(stream bytestream.ByteStream_WriteServer) error {
 	request, err := stream.Recv()
 	if err != nil {
+		log.Printf("bytestream server write: read err %+v\n", err)
 		return err
 	}
 	digest, compressor, err := digest.NewDigestFromByteStreamWritePath(request.ResourceName)
 	if err != nil {
+		log.Printf("bytestream server write: digest err %+v\n", err)
 		return err
 	}
 	if compressor != remoteexecution.Compressor_IDENTITY {
@@ -116,12 +119,14 @@ func (s *byteStreamServer) Write(stream bytestream.ByteStream_WriteServer) error
 
 	r := &byteStreamWriteServerChunkReader{stream: stream}
 	if err := r.setRequest(request); err != nil {
+		log.Printf("bytestream server write: resourceName %v, setRequest err %+v\n", request.ResourceName, err)
 		return err
 	}
 	if err := s.blobAccess.Put(
 		stream.Context(),
 		digest,
 		buffer.NewCASBufferFromChunkReader(digest, r, buffer.UserProvided)); err != nil {
+		log.Printf("bytestream server write: resourceName %v, blobAccess.Put err %+v\n", request.ResourceName, err)
 		return err
 	}
 	return stream.SendAndClose(&bytestream.WriteResponse{

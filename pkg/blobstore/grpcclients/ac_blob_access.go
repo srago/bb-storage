@@ -2,6 +2,7 @@ package grpcclients
 
 import (
 	"context"
+	"log"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
@@ -35,6 +36,7 @@ func (ba *acBlobAccess) Get(ctx context.Context, digest digest.Digest) buffer.Bu
 		ActionDigest: digest.GetProto(),
 	})
 	if err != nil {
+		log.Printf("GetActionResult (client): %s failed %v\n", digest.String(), err)
 		return buffer.NewBufferFromError(err)
 	}
 	return buffer.NewProtoBufferFromProto(actionResult, buffer.BackendProvided(buffer.Irreparable(digest)))

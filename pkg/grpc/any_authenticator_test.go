@@ -1,11 +1,11 @@
-package grpc_test
+package authenticator_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/buildbarn/bb-storage/internal/mock"
-	bb_grpc "github.com/buildbarn/bb-storage/pkg/grpc"
+	"github.com/buildbarn/bb-storage/pkg/authenticator"
 	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -20,7 +20,7 @@ func TestAnyAuthenticatorExample(t *testing.T) {
 	m0 := mock.NewMockAuthenticator(ctrl)
 	m1 := mock.NewMockAuthenticator(ctrl)
 	m2 := mock.NewMockAuthenticator(ctrl)
-	a := bb_grpc.NewAnyAuthenticator([]bb_grpc.Authenticator{m0, m1, m2})
+	a := authenticator.NewAnyAuthenticator([]authenticator.Authenticator{m0, m1, m2})
 
 	type CtxKey struct{}
 

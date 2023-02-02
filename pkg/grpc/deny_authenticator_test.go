@@ -1,10 +1,10 @@
-package grpc_test
+package authenticator_test
 
 import (
 	"context"
 	"testing"
 
-	bb_grpc "github.com/buildbarn/bb-storage/pkg/grpc"
+	"github.com/buildbarn/bb-storage/pkg/authenticator"
 	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/stretchr/testify/require"
 
@@ -13,7 +13,7 @@ import (
 )
 
 func TestDenyAuthenticator(t *testing.T) {
-	authenticator := bb_grpc.NewDenyAuthenticator("This service has been disabled")
+	authenticator := authenticator.NewDenyAuthenticator("This service has been disabled")
 	newCtx, err := authenticator.Authenticate(context.Background())
 	testutil.RequireEqualStatus(
 		t,

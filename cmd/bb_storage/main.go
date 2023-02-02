@@ -29,7 +29,7 @@ func main() {
 	if err := util.UnmarshalConfigurationFromFile(os.Args[1], &configuration); err != nil {
 		log.Fatalf("Failed to read configuration from %s: %s", os.Args[1], err)
 	}
-	lifecycleState, grpcClientFactory, err := global.ApplyConfiguration(configuration.Global)
+	lifecycleState, grpcClientFactory, err := global.ApplyConfiguration(configuration.Global, configuration.GetMonitoredFileSystems())
 	if err != nil {
 		log.Fatal("Failed to apply global configuration options: ", err)
 	}

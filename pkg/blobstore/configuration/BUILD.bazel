@@ -18,6 +18,7 @@ go_library(
     importpath = "github.com/buildbarn/bb-storage/pkg/blobstore/configuration",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/bb_tls",
         "//pkg/blobstore",
         "//pkg/blobstore/completenesschecking",
         "//pkg/blobstore/grpcclients",

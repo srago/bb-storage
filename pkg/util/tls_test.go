@@ -1,11 +1,11 @@
-package util_test
+package bb_tls_test
 
 import (
 	"crypto/tls"
 	"testing"
 
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls"
-	"github.com/buildbarn/bb-storage/pkg/util"
+	"github.com/buildbarn/bb-storage/pkg/bb_tls"
 	"github.com/stretchr/testify/require"
 
 	"google.golang.org/grpc/codes"
@@ -97,13 +97,35 @@ dLujWlL67wszLw0SC588jU7i9sHqtzOrThn4LAybbxmf4kBiExj5V/JghFPnstBG
 ecgKVpPvVNRL4/3RQYXPEdErkwCshVk=
 -----END PRIVATE KEY-----
 `
+	// https://github.com/spiffe/go-spiffe/blob/v2.0.0-beta.8/v2/svid/x509svid/testdata/good-key-and-cert.pem
+	spiffeKey = `
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdCYVeDmdr1H8Fzpn
+MSfBa0zAAy+fnp2z84R4v9Ff7nGhRANCAATxJPQ7ahtD1VgTIURuLIgwvudpm0C0
+D0NT11/NgJ4Dh8emWuCTRkv4wFc4yMISjR8tf6PGoyku4/LvAZ/CWpFo
+-----END PRIVATE KEY-----`
+	spiffeCert = `
+-----BEGIN CERTIFICATE-----
+MIICBjCCAYygAwIBAgIQNj0chc2GkwvkNG0vVbWuADAKBggqhkjOPQQDAzAeMQsw
+CQYDVQQGEwJVUzEPMA0GA1UEChMGU1BJRkZFMB4XDTIwMDMyNDE0MTM0MVoXDTIw
+MDMyNDE1MTM1MVowHTELMAkGA1UEBhMCVVMxDjAMBgNVBAoTBVNQSVJFMFkwEwYH
+KoZIzj0CAQYIKoZIzj0DAQcDQgAE8ST0O2obQ9VYEyFEbiyIML7naZtAtA9DU9df
+zYCeA4fHplrgk0ZL+MBXOMjCEo0fLX+jxqMpLuPy7wGfwlqRaKOBrDCBqTAOBgNV
+HQ8BAf8EBAMCA6gwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMAwGA1Ud
+EwEB/wQCMAAwHQYDVR0OBBYEFB3UYIIkxjMf9rh9tvwj86Y24+6gMB8GA1UdIwQY
+MBaAFNM1QzCBy3PuB2d3zJi6GSEqqVF5MCoGA1UdEQQjMCGGH3NwaWZmZTovL2V4
+YW1wbGUub3JnL3dvcmtsb2FkLTEwCgYIKoZIzj0EAwMDaAAwZQIwKhlIltKg+K/3
+W05Snv56s7X9NuUDKHjaCQsutyIiYxbxQz5jZgjafMusAwr+lMQkAjEAsY4Omqtj
+MT7lix7GtnRkvgmaWRTyooxyR1C2w8PYS6lSo6FJCIV6e1EBvryj6Vm1
+-----END CERTIFICATE-----
+`
 )
 
 func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	t.Run("Disabled", func(t *testing.T) {
 		// When the TLS configuration is nil, TLS should be left
 		// disabled.
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(nil)
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(nil)
 		require.NoError(t, err)
 		require.Nil(t, tlsConfig)
 	})
@@ -111,7 +133,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	t.Run("Default", func(t *testing.T) {
 		// The default configuration should enforce the use of
 		// TLS 1.2 or higher.
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{})
 		require.NoError(t, err)
 		require.Equal(t, &tls.Config{
@@ -120,7 +142,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("ClientCertificate", func(t *testing.T) {
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				ClientCertificate: exampleCertificate,
 				ClientPrivateKey:  examplePrivateKey,
@@ -130,7 +152,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("InvalidClientCertificate", func(t *testing.T) {
-		_, err := util.NewTLSConfigFromClientConfiguration(
+		_, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				ClientCertificate: "This is an invalid certificate",
 				ClientPrivateKey:  examplePrivateKey,
@@ -139,7 +161,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("ServerCertificateAuthorities", func(t *testing.T) {
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				ServerCertificateAuthorities: exampleCertificate,
 			})
@@ -152,7 +174,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 		// a rich error message, we have no choice but to return
 		// a simple error message in case of CA parsing failures.
 		// https://github.com/golang/go/issues/23711#issuecomment-363322424
-		_, err := util.NewTLSConfigFromClientConfiguration(
+		_, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				ServerCertificateAuthorities: "This is an invalid certificate",
 			})
@@ -161,7 +183,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 
 	t.Run("CustomCipherSuites", func(t *testing.T) {
 		// Custom cipher suites should be respected.
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				CipherSuites: []string{
 					"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
@@ -183,7 +205,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("InvalidCipherSuite", func(t *testing.T) {
-		_, err := util.NewTLSConfigFromClientConfiguration(
+		_, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				CipherSuites: []string{
 					"TLS_ECDHE_ECDSA_WITH_AES_257_GCM_SHA385",
@@ -193,7 +215,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("ServerName", func(t *testing.T) {
-		tlsConfig, err := util.NewTLSConfigFromClientConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
 			&configuration.ClientConfiguration{
 				ServerName: "example.com",
 			})
@@ -203,13 +225,27 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 			ServerName: "example.com",
 		}, tlsConfig)
 	})
+
+	t.Run("SpiffeClientCertificate", func(t *testing.T) {
+		tlsConfig, err := bb_tls.NewTLSConfigFromClientConfiguration(
+			&configuration.ClientConfiguration{
+				ClientCertificate: spiffeCert,
+				ClientPrivateKey:  spiffeKey,
+			})
+		cert, _ := tls.X509KeyPair([]byte(spiffeCert), []byte(spiffeKey))
+		require.NoError(t, err)
+		require.Equal(t, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}, tlsConfig)
+	})
 }
 
 func TestTLSConfigFromServerConfiguration(t *testing.T) {
 	t.Run("Disabled", func(t *testing.T) {
 		// When the TLS configuration is nil, TLS should be left
 		// disabled.
-		tlsConfig, err := util.NewTLSConfigFromServerConfiguration(nil)
+		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(nil, nil)
 		require.NoError(t, err)
 		require.Nil(t, tlsConfig)
 	})
@@ -217,11 +253,11 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 	t.Run("Default", func(t *testing.T) {
 		// The default configuration should enforce the use of
 		// TLS 1.2 or higher.
-		tlsConfig, err := util.NewTLSConfigFromServerConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(
 			&configuration.ServerConfiguration{
 				ServerCertificate: exampleCertificate,
 				ServerPrivateKey:  examplePrivateKey,
-			})
+			}, nil)
 		require.NoError(t, err)
 		require.Len(t, tlsConfig.Certificates, 1)
 		tlsConfig.Certificates = nil
@@ -232,17 +268,17 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 	})
 
 	t.Run("InvalidServerCertificate", func(t *testing.T) {
-		_, err := util.NewTLSConfigFromServerConfiguration(
+		_, err := bb_tls.NewTLSConfigFromServerConfiguration(
 			&configuration.ServerConfiguration{
 				ServerCertificate: "This is an invalid certificate",
 				ServerPrivateKey:  examplePrivateKey,
-			})
+			}, nil)
 		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid server certificate or private key: tls: failed to find any PEM data in certificate input"), err)
 	})
 
 	t.Run("CustomCipherSuites", func(t *testing.T) {
 		// Custom cipher suites should be respected.
-		tlsConfig, err := util.NewTLSConfigFromServerConfiguration(
+		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(
 			&configuration.ServerConfiguration{
 				ServerCertificate: exampleCertificate,
 				ServerPrivateKey:  examplePrivateKey,
@@ -252,7 +288,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 					"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 					"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 				},
-			})
+			}, nil)
 		require.NoError(t, err)
 		require.Len(t, tlsConfig.Certificates, 1)
 		tlsConfig.Certificates = nil
@@ -269,14 +305,29 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 	})
 
 	t.Run("InvalidCipherSuite", func(t *testing.T) {
-		_, err := util.NewTLSConfigFromServerConfiguration(
+		_, err := bb_tls.NewTLSConfigFromServerConfiguration(
 			&configuration.ServerConfiguration{
 				ServerCertificate: exampleCertificate,
 				ServerPrivateKey:  examplePrivateKey,
 				CipherSuites: []string{
 					"TLS_ECDHE_ECDSA_WITH_AES_257_GCM_SHA385",
 				},
-			})
+			}, nil)
 		require.Equal(t, status.Error(codes.InvalidArgument, "Unsupported cipher suite: \"TLS_ECDHE_ECDSA_WITH_AES_257_GCM_SHA385\""), err)
+	})
+
+	t.Run("SpiffeServerCertificate", func(t *testing.T) {
+		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(
+			&configuration.ServerConfiguration{
+				ServerCertificate: spiffeCert,
+				ServerPrivateKey:  spiffeKey,
+			}, nil)
+		cert, _ := tls.X509KeyPair([]byte(spiffeCert), []byte(spiffeKey))
+		require.NoError(t, err)
+		require.Equal(t, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+			ClientAuth:   tls.RequestClientCert,
+		}, tlsConfig)
 	})
 }

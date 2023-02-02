@@ -5,6 +5,8 @@ import (
 	"os"
 
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/grpc"
+	"github.com/buildbarn/bb-storage/pkg/authenticator"
+	"github.com/buildbarn/bb-storage/pkg/bb_tls"
 	"github.com/buildbarn/bb-storage/pkg/util"
 	"github.com/grpc-ecosystem/go-grpc-prometheus"
 
@@ -36,7 +38,7 @@ func NewServersFromConfigurationAndServe(configurations []*configuration.ServerC
 
 	for _, configuration := range configurations {
 		// Create an authenticator for requests.
-		authenticator, err := NewAuthenticatorFromConfiguration(configuration.AuthenticationPolicy)
+		authenticator, err := authenticator.NewAuthenticatorFromConfiguration(configuration.AuthenticationPolicy)
 		if err != nil {
 			return err
 		}
@@ -56,7 +58,7 @@ func NewServersFromConfigurationAndServe(configurations []*configuration.ServerC
 		}
 
 		// Enable TLS if provided.
-		if tlsConfig, err := util.NewTLSConfigFromServerConfiguration(configuration.Tls); err != nil {
+		if tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(configuration.Tls, configuration.AuthenticationPolicy); err != nil {
 			return err
 		} else if tlsConfig != nil {
 			serverOptions = append(serverOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))

@@ -2,6 +2,7 @@ package sharding
 
 import (
 	"context"
+	"log"
 
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
 	"github.com/buildbarn/bb-storage/pkg/blobstore/buffer"
@@ -58,6 +59,7 @@ func (ba *shardingBlobAccess) Get(ctx context.Context, digest digest.Digest) buf
 func (ba *shardingBlobAccess) Put(ctx context.Context, digest digest.Digest, b buffer.Buffer) error {
 	index := ba.getBackendIndex(digest)
 	if err := ba.backends[index].Put(ctx, digest, b); err != nil {
+		log.Printf("Put Shard %d digest %s failed: %+v\n", index, digest.String(), err)
 		return util.StatusWrapf(err, "Shard %d", index)
 	}
 	return nil
@@ -84,6 +86,7 @@ func (ba *shardingBlobAccess) FindMissing(ctx context.Context, digests digest.Se
 			group.Go(func() error {
 				missing, err := ba.backends[index].FindMissing(ctxWithCancel, digests.Build())
 				if err != nil {
+					log.Printf("Shard %d error %+v", index, err)
 					return util.StatusWrapf(err, "Shard %d", index)
 				}
 				*missingOut = missing

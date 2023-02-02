@@ -88,6 +88,10 @@ message ApplicationConfiguration {
   // operation. This is hopefully safe, as operation names are hard to guess,
   // and the forwarded-to scheduler should perform its own authorization.
   buildbarn.configuration.auth.AuthorizerConfiguration execute_authorizer = 16;
+
+  // File systems to monitor.  This is ignored unless prometheus is enabled
+  // in the global config.
+  repeated string monitored_file_systems = 17;
 }
 
 // Authorizer configuration for interfaces which don't allow

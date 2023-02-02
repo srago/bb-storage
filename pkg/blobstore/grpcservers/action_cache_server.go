@@ -2,6 +2,7 @@ package grpcservers
 
 import (
 	"context"
+	"log"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
@@ -31,12 +32,14 @@ func (s *actionCacheServer) GetActionResult(ctx context.Context, in *remoteexecu
 	}
 	digest, err := instanceName.NewDigestFromProto(in.ActionDigest)
 	if err != nil {
+		log.Printf("GetActionDigest (server): can't get digest from proto: %v\n", err)
 		return nil, err
 	}
 	actionResult, err := s.blobAccess.Get(ctx, digest).ToProto(
 		&remoteexecution.ActionResult{},
 		s.maximumMessageSizeBytes)
 	if err != nil {
+		log.Printf("GetActionResult (server): %s failed %v\n", digest.String(), err)
 		return nil, err
 	}
 	return actionResult.(*remoteexecution.ActionResult), nil
@@ -49,6 +52,7 @@ func (s *actionCacheServer) UpdateActionResult(ctx context.Context, in *remoteex
 	}
 	digest, err := instanceName.NewDigestFromProto(in.ActionDigest)
 	if err != nil {
+		log.Printf("UpdateActionResult (server): can't create digest: %v", err)
 		return nil, err
 	}
 	return in.ActionResult, s.blobAccess.Put(

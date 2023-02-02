@@ -1,0 +1,37 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "bb_tls",
+    srcs = [
+        "tls.go",
+    ],
+    importpath = "github.com/buildbarn/bb-storage/pkg/bb_tls",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/authenticator",
+        "//pkg/clock",
+        "//pkg/proto/configuration/grpc",
+	"//pkg/proto/configuration/spiffe",
+        "//pkg/proto/configuration/tls",
+        "//pkg/spiffebundle",
+        "//pkg/util",
+        "@com_github_spiffe_go_spiffe_v2//bundle/x509bundle",
+        "@com_github_spiffe_go_spiffe_v2//spiffeid",
+        "@com_github_spiffe_go_spiffe_v2//spiffetls/tlsconfig",
+        "@com_github_spiffe_go_spiffe_v2//svid/x509svid",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_test(
+    name = "bb_tls_test",
+    srcs = ["tls_test.go"],
+    deps = [
+        ":bb_tls",
+        "//pkg/proto/configuration/tls",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)

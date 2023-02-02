@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/buildbarn/bb-storage/pkg/http",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/bb_tls",
         "//pkg/proto/configuration/http",
         "//pkg/util",
         "@org_golang_google_grpc//codes",
