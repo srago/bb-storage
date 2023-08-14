@@ -2,63 +2,67 @@ workspace(name = "com_github_buildbarn_bb_storage")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-#http_archive(
-#    name = "bazel_gomock",
-#    patches = ["//:patches/bazel_gomock/upstream-pr-50.diff"],
-#    sha256 = "4baf3389ca48c30d8b072a027923c91c45915ab8061e39e7a0c62706332e096e",
-#    strip_prefix = "bazel_gomock-1.2",
-#    urls = ["https://github.com/jmhodges/bazel_gomock/archive/v1.2.tar.gz"],
-#)
-
-#http_archive(
-#    name = "bazel_toolchains",
-#    sha256 = "28cb3666da80fbc62d4c46814f5468dd5d0b59f9064c0b933eee3140d706d330",
-#    strip_prefix = "bazel-toolchains-0.27.1",
-#    urls = [
-#        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/0.27.1.tar.gz",
-#        "https://github.com/bazelbuild/bazel-toolchains/archive/0.27.1.tar.gz",
-#    ],
-#)
+http_archive(
+    name = "rules_pkg",
+    sha256 = "8f9ee2dc10c1ae514ee599a8b42ed99fa262b757058f65ad3c384289ff70c4b8",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_pkg/releases/download/0.9.1/rules_pkg-0.9.1.tar.gz",
+        "https://github.com/bazelbuild/rules_pkg/releases/download/0.9.1/rules_pkg-0.9.1.tar.gz",
+    ],
+)
 
 http_archive(
     name = "io_bazel_rules_docker",
-    sha256 = "59d5b42ac315e7eadffa944e86e90c2990110a1c8075f1cd145f487e999d22b3",
-    strip_prefix = "rules_docker-0.17.0",
-    urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.17.0/rules_docker-v0.17.0.tar.gz"],
+    sha256 = "b1e80761a8a8243d03ebca8845e9cc1ba6c82ce7c5179ce2b295cd36f7e394bf",
+    urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.25.0/rules_docker-v0.25.0.tar.gz"],
 )
 
 http_archive(
     name = "io_bazel_rules_go",
-    patches = [
-        "//:patches/io_bazel_rules_go/service-registrar.diff",
-    ],
-    patch_args = ["-p1"],
-    sha256 = "099a9fb96a376ccbbb7d291ed4ecbdfd42f6bc822ab77ae6f1b5cb9e914e94fa",
+    sha256 = "278b7ff5a826f3dc10f04feaf0b70d48b68748ccd512d7f98bf442077f043fe3",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.35.0/rules_go-v0.35.0.zip",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.35.0/rules_go-v0.35.0.zip",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.41.0/rules_go-v0.41.0.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.41.0/rules_go-v0.41.0.zip",
     ],
 )
 
 http_archive(
     name = "bazel_gazelle",
-    sha256 = "62ca106be173579c0a167deb23358fdfe71ffa1e4cfdddf5582af26520f1c66f",
+    patches = [
+        "//:patches/bazel_gazelle/dont-flatten-srcs.diff",
+        "//:patches/bazel_gazelle/issue-1595.diff",
+    ],
+    sha256 = "29218f8e0cebe583643cbf93cae6f971be8a2484cdcfa1e45057658df8d54002",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.32.0/bazel-gazelle-v0.32.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.32.0/bazel-gazelle-v0.32.0.tar.gz",
     ],
 )
 
-load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+load("@bazel_gazelle//:deps.bzl", "go_repository")
 
-go_rules_dependencies()
-
-go_register_toolchains(version = "1.19")
+# Override the version of gomock to one that includes support for
+# generating mocks for function types. We can't do this through go.mod,
+# as it causes almost all of our package dependencies to be downgraded.
+go_repository(
+    name = "com_github_golang_mock",
+    importpath = "github.com/golang/mock",
+    patches = ["//:patches/com_github_golang_mock/mocks-for-funcs.diff"],
+    replace = "github.com/golang/mock",
+    sum = "h1:DxRM2MRFDKF8JGaT1ZSsCZ9KxoOki+rrOoB011jIEDc=",
+    version = "v1.6.1-0.20220512030613-73266f9366fc",
+)
 
 # gazelle:repository_macro go_dependencies.bzl%go_dependencies
 load(":go_dependencies.bzl", "go_dependencies")
 
 go_dependencies()
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+
+go_rules_dependencies()
+
+go_register_toolchains(version = "1.20.1")
 
 load("@io_bazel_rules_docker//repositories:repositories.bzl", container_repositories = "repositories")
 
@@ -76,17 +80,6 @@ load("@io_bazel_rules_docker//go:image.bzl", _go_image_repos = "repositories")
 
 _go_image_repos()
 
-http_archive(
-    name = "com_github_bazelbuild_buildtools",
-    sha256 = "09a94213ea0d4a844e991374511fb0d44650e9c321799ec5d5dd28b250d82ca3",
-    strip_prefix = "buildtools-5.0.0",
-    url = "https://github.com/bazelbuild/buildtools/archive/5.0.0.tar.gz",
-)
-
-load("@com_github_bazelbuild_buildtools//buildifier:deps.bzl", "buildifier_dependencies")
-
-buildifier_dependencies()
-
 load("@com_github_bazelbuild_remote_apis//:repository_rules.bzl", "switched_rules_by_language")
 
 switched_rules_by_language(
@@ -96,9 +89,9 @@ switched_rules_by_language(
 
 http_archive(
     name = "com_google_protobuf",
-    sha256 = "77ad26d3f65222fd96ccc18b055632b0bfedf295cb748b712a98ba1ac0b704b2",
-    strip_prefix = "protobuf-3.17.3",
-    urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v3.17.3/protobuf-all-3.17.3.tar.gz"],
+    sha256 = "a700a49470d301f1190a487a923b5095bf60f08f4ae4cac9f5f7c36883d17971",
+    strip_prefix = "protobuf-23.4",
+    urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protobuf-23.4.tar.gz"],
 )
 
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
@@ -106,42 +99,65 @@ load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
 protobuf_deps()
 
 http_archive(
+    name = "googleapis",
+    sha256 = "361e26593b881e70286a28065859c941e25b96f9c48ba91127293d0a881152d6",
+    strip_prefix = "googleapis-a3770599794a8d319286df96f03343b6cd0e7f4f",
+    urls = ["https://github.com/googleapis/googleapis/archive/a3770599794a8d319286df96f03343b6cd0e7f4f.zip"],
+)
+
+load("@googleapis//:repository_rules.bzl", "switched_rules_by_language")
+
+switched_rules_by_language(
+    name = "com_google_googleapis_imports",
+)
+
+http_archive(
     name = "com_github_buildbarn_bb_deployments",
-    sha256 = "cf910624a50d3f1f4c8af98d96f4ff7cbdd51f2c107315ac835256776a41df1c",
-    strip_prefix = "bb-deployments-cf505b7f363ce87798a367d6741b8f550a5e077a",
-    url = "https://github.com/buildbarn/bb-deployments/archive/cf505b7f363ce87798a367d6741b8f550a5e077a.tar.gz",
+    sha256 = "3c3f3acc40a829ce30f9e593b2ad48d2016386bfbbb70f0e36f47fb49a9d6ea0",
+    strip_prefix = "bb-deployments-5b304a6df814ba5c7f862557cfdf2ec365f5a682",
+    url = "https://github.com/buildbarn/bb-deployments/archive/5b304a6df814ba5c7f862557cfdf2ec365f5a682.tar.gz",
+)
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+http_file(
+    name = "com_github_krallin_tini_tini_static_amd64",
+    downloaded_file_path = "tini",
+    sha256 = "eadb9d6e2dc960655481d78a92d2c8bc021861045987ccd3e27c7eae5af0cf33",
+    urls = ["https://github.com/krallin/tini/releases/download/v0.18.0/tini-static-amd64"],
 )
 
 http_archive(
     name = "com_grail_bazel_toolchain",
-    sha256 = "b3dec631fe2be45b3a7a8a4161dd07fadc68825842e8d6305ed35bc8560968ca",
-    strip_prefix = "bazel-toolchain-0.5.1",
-    urls = ["https://github.com/grailbio/bazel-toolchain/archive/0.5.1.tar.gz"],
+    canonical_id = "0.7.2",
+    sha256 = "f7aa8e59c9d3cafde6edb372d9bd25fb4ee7293ab20b916d867cd0baaa642529",
+    strip_prefix = "bazel-toolchain-0.7.2",
+    url = "https://github.com/grailbio/bazel-toolchain/archive/0.7.2.tar.gz",
 )
 
 load("@com_grail_bazel_toolchain//toolchain:rules.bzl", "llvm_toolchain")
 
 llvm_toolchain(
     name = "llvm_toolchain",
-    llvm_version = "9.0.0",
+    llvm_version = "14.0.0",
 )
 
 http_archive(
     name = "io_bazel_rules_jsonnet",
-    sha256 = "7f51f859035cd98bcf4f70dedaeaca47fe9fbae6b199882c516d67df416505da",
-    strip_prefix = "rules_jsonnet-0.3.0",
-    urls = ["https://github.com/bazelbuild/rules_jsonnet/archive/0.3.0.tar.gz"],
+    sha256 = "d20270872ba8d4c108edecc9581e2bb7f320afab71f8caa2f6394b5202e8a2c3",
+    strip_prefix = "rules_jsonnet-0.4.0",
+    urls = ["https://github.com/bazelbuild/rules_jsonnet/archive/0.4.0.tar.gz"],
 )
 
 load("@io_bazel_rules_jsonnet//jsonnet:jsonnet.bzl", "jsonnet_repositories")
 
 jsonnet_repositories()
 
-load("@jsonnet_go//bazel:repositories.bzl", "jsonnet_go_repositories")
+load("@google_jsonnet_go//bazel:repositories.bzl", "jsonnet_go_repositories")
 
 jsonnet_go_repositories()
 
-load("@jsonnet_go//bazel:deps.bzl", "jsonnet_go_dependencies")
+load("@google_jsonnet_go//bazel:deps.bzl", "jsonnet_go_dependencies")
 
 jsonnet_go_dependencies()
 
@@ -163,7 +179,7 @@ load("@build_bazel_rules_nodejs//:index.bzl", "npm_install")
 
 npm_install(
     name = "npm",
-    package_json = "//:package.json",
-    package_lock_json = "//:package-lock.json",
+    package_json = "@com_github_buildbarn_bb_storage//:package.json",
+    package_lock_json = "@com_github_buildbarn_bb_storage//:package-lock.json",
     symlink_node_modules = False,
 )

@@ -8,9 +8,10 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/digest"
 	"github.com/buildbarn/bb-storage/pkg/util"
 
-	"google.golang.org/genproto/googleapis/longrunning"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 )
 
 // DemultiplexedBuildQueueGetter is the callback invoked by the
@@ -99,7 +100,7 @@ type operationNamePrepender struct {
 	prefix string
 }
 
-func (np *operationNamePrepender) Send(operation *longrunning.Operation) error {
+func (np *operationNamePrepender) Send(operation *longrunningpb.Operation) error {
 	operationCopy := *operation
 	operationCopy.Name = np.prefix + operation.Name
 	return np.Execution_ExecuteServer.Send(&operationCopy)

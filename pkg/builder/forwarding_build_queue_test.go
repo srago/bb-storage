@@ -11,11 +11,12 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"google.golang.org/genproto/googleapis/longrunning"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	"cloud.google.com/go/longrunning/autogen/longrunningpb"
 )
 
 func TestForwardingBuildQueue(t *testing.T) {
@@ -36,7 +37,7 @@ func TestForwardingBuildQueue(t *testing.T) {
 				SizeBytes: 241,
 			},
 		}
-		operation := longrunning.Operation{
+		operation := longrunningpb.Operation{
 			Name: "9050db2b-8055-4ad1-ba94-7b8068ff4b73",
 		}
 
