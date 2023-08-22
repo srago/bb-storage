@@ -38,6 +38,7 @@ import (
 	//remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/blobstore/buffer"
 	pb "github.com/buildbarn/bb-storage/pkg/proto/configuration/blobstore"
+
 	// TODO(ragost): uncomment this when we rebase to the head of the buildbarn source tree.
 	//"github.com/buildbarn/bb-storage/pkg/blobstore/slicing"
 	//"github.com/buildbarn/bb-storage/pkg/capabilities"
