@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/buildbarn/bb-storage/pkg/bb_tls"
 	"github.com/stretchr/testify/require"
 
@@ -157,7 +158,7 @@ func TestTLSConfigFromClientConfiguration(t *testing.T) {
 				ClientCertificate: "This is an invalid certificate",
 				ClientPrivateKey:  examplePrivateKey,
 			})
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid client certificate or private key: tls: failed to find any PEM data in certificate input"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid client certificate or private key: tls: failed to find any PEM data in certificate input"), err)
 	})
 
 	t.Run("ServerCertificateAuthorities", func(t *testing.T) {
@@ -245,7 +246,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 	t.Run("Disabled", func(t *testing.T) {
 		// When the TLS configuration is nil, TLS should be left
 		// disabled.
-		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(nil, nil)
+		tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(nil)
 		require.NoError(t, err)
 		require.Nil(t, tlsConfig)
 	})
@@ -257,7 +258,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 			&configuration.ServerConfiguration{
 				ServerCertificate: exampleCertificate,
 				ServerPrivateKey:  examplePrivateKey,
-			}, nil)
+			})
 		require.NoError(t, err)
 		require.Len(t, tlsConfig.Certificates, 1)
 		tlsConfig.Certificates = nil
@@ -272,8 +273,8 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 			&configuration.ServerConfiguration{
 				ServerCertificate: "This is an invalid certificate",
 				ServerPrivateKey:  examplePrivateKey,
-			}, nil)
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid server certificate or private key: tls: failed to find any PEM data in certificate input"), err)
+			})
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid server certificate or private key: tls: failed to find any PEM data in certificate input"), err)
 	})
 
 	t.Run("CustomCipherSuites", func(t *testing.T) {
@@ -288,7 +289,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 					"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 					"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 				},
-			}, nil)
+			})
 		require.NoError(t, err)
 		require.Len(t, tlsConfig.Certificates, 1)
 		tlsConfig.Certificates = nil
@@ -312,7 +313,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 				CipherSuites: []string{
 					"TLS_ECDHE_ECDSA_WITH_AES_257_GCM_SHA385",
 				},
-			}, nil)
+			})
 		require.Equal(t, status.Error(codes.InvalidArgument, "Unsupported cipher suite: \"TLS_ECDHE_ECDSA_WITH_AES_257_GCM_SHA385\""), err)
 	})
 
@@ -321,7 +322,7 @@ func TestTLSConfigFromServerConfiguration(t *testing.T) {
 			&configuration.ServerConfiguration{
 				ServerCertificate: spiffeCert,
 				ServerPrivateKey:  spiffeKey,
-			}, nil)
+			})
 		cert, _ := tls.X509KeyPair([]byte(spiffeCert), []byte(spiffeKey))
 		require.NoError(t, err)
 		require.Equal(t, &tls.Config{

@@ -7,7 +7,6 @@ replace github.com/grpc-ecosystem/grpc-gateway/v2 => github.com/grpc-ecosystem/g
 
 require (
 	github.com/bazelbuild/remote-apis v0.0.0-20230719205137-cb8058798964
-	github.com/buildbarn/bb-storage v0.0.0-20230804153757-d2663dc3d79c
 	github.com/buildbarn/go-xdr v0.0.0-20230105161020-895955dd8771
 	github.com/golang/protobuf v1.5.3
 	github.com/google/uuid v1.3.0

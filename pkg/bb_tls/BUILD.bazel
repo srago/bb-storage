@@ -3,6 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "bb_tls",
     srcs = [
+        "spiffe_tls.go",
         "tls.go",
     ],
     importpath = "github.com/buildbarn/bb-storage/pkg/bb_tls",
@@ -11,7 +12,7 @@ go_library(
         "//pkg/authenticator",
         "//pkg/clock",
         "//pkg/proto/configuration/grpc",
-	"//pkg/proto/configuration/spiffe",
+        "//pkg/proto/configuration/spiffe",
         "//pkg/proto/configuration/tls",
         "//pkg/spiffebundle",
         "//pkg/util",
@@ -30,6 +31,7 @@ go_test(
     deps = [
         ":bb_tls",
         "//pkg/proto/configuration/tls",
+        "//pkg/testutil",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",

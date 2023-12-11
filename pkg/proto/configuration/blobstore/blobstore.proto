@@ -371,11 +371,11 @@ message StorageType {
 
 // An alternate mirror implementation.  Three backends mirror one another
 // and can withstand the failure of one backend.  When used with k8s, configure
-// a pod disruption budget of one, so at most one backend will be taked down at
+// a pod disruption budget of one, so at most one backend will be taken down at
 // a time during pushes.
 //
 // Care must be taken when used with the action cache so that copies of an action
-// result entry have the same contents on all mirrrors.
+// result entry have the same contents on all mirrors.
 message TriMirroredBlobAccessConfiguration {
   // Three backend mirrors.
   BlobAccessConfiguration backend_a = 1;
@@ -383,7 +383,7 @@ message TriMirroredBlobAccessConfiguration {
   BlobAccessConfiguration backend_c = 3;
 
   // Distinguish between the action cache and the CAS to know when to
-  // apply additional logic to avoid inconsistenties in the action cache.
+  // apply additional logic to avoid inconsistencies in the action cache.
   StorageType.Value storage_type = 4;
 }
 
