@@ -38,6 +38,7 @@ go_test(
         "//pkg/blobstore/buffer",
         "//pkg/digest",
         "//pkg/eviction",
+        "//pkg/testutil",
         "@com_github_golang_mock//gomock",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//codes",

@@ -10,6 +10,7 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/blobstore/replication"
 	"github.com/buildbarn/bb-storage/pkg/digest"
 	"github.com/buildbarn/bb-storage/pkg/eviction"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
@@ -101,7 +102,7 @@ func TestQueuedBlobReplicatorReplicateSingle(t *testing.T) {
 
 		b := replicator.ReplicateSingle(ctx, helloDigest)
 		_, err := b.ToByteSlice(10)
-		require.Equal(t, status.Error(codes.Internal, "Replication failed: Server on fire"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Replication failed: Server on fire"), err)
 
 		// Replication failures should not be cached. Another
 		// replication should be triggered.
@@ -112,7 +113,7 @@ func TestQueuedBlobReplicatorReplicateSingle(t *testing.T) {
 
 		b = replicator.ReplicateSingle(ctx, helloDigest)
 		_, err = b.ToByteSlice(10)
-		require.Equal(t, status.Error(codes.Internal, "Replication failed: Server on fire"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Replication failed: Server on fire"), err)
 	})
 }
 
@@ -148,14 +149,14 @@ func TestQueuedBlobReplicatorReplicateMultiple(t *testing.T) {
 		// Replication errors should not cause objects to be cached.
 		clock.EXPECT().Now().Return(time.Unix(1200, 0)).Times(2)
 		baseReplicator.EXPECT().ReplicateMultiple(ctx, helloDigests).Return(status.Error(codes.Internal, "Server on fire"))
-		require.Equal(
+		testutil.RequireEqualStatus(
 			t,
 			status.Error(codes.Internal, "Server on fire"),
 			replicator.ReplicateMultiple(ctx, helloDigests))
 
 		clock.EXPECT().Now().Return(time.Unix(1201, 0)).Times(2)
 		baseReplicator.EXPECT().ReplicateMultiple(ctx, helloDigests).Return(status.Error(codes.Internal, "Server on fire"))
-		require.Equal(
+		testutil.RequireEqualStatus(
 			t,
 			status.Error(codes.Internal, "Server on fire"),
 			replicator.ReplicateMultiple(ctx, helloDigests))

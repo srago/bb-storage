@@ -1,20 +1,104 @@
 package spiffebundle
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io/ioutil"
+	"math/big"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/buildbarn/bb-storage/pkg/clock"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
+func newSPIFFECaCertAndKey(td spiffeid.TrustDomain) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	u, err := url.Parse(td.IDString())
+	if err != nil {
+		return nil, nil, err
+	}
+	now := clock.SystemClock.Now()
+	name := pkix.Name{
+		Country:      []string{"US"},
+		Organization: []string{"Acme Corp."},
+	}
+	cert := &x509.Certificate{
+		Subject:               name,
+		Issuer:                name,
+		IsCA:                  true,
+		NotBefore:             now,
+		NotAfter:              now.Add(1 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		URIs:                  []*url.URL{u},
+	}
+	cert, key, err := signCert(cert)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, key, nil
+}
+
+func signCert(req *x509.Certificate) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	publicKey := privateKey.Public()
+	req.SerialNumber, _ = rand.Int(rand.Reader, big.NewInt(666))
+
+	certData, err := x509.CreateCertificate(rand.Reader, req, req, publicKey, privateKey)  // self-sign
+	if err != nil {
+		return nil, nil, err
+	}
+	cert, err := x509.ParseCertificate(certData)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, privateKey, nil
+}
+
+func makeCaPemFile(t *testing.T, spiffeId string) (string) {
+	td, err := spiffeid.TrustDomainFromString(spiffeId)
+	if err != nil {
+		t.Errorf("can't extract SPIFFE ID: %v", err)
+	}
+	caCert, _, err := newSPIFFECaCertAndKey(td)
+	if err != nil {
+		t.Errorf("can't create CA cert & key: %v", err)
+	}
+	certPath := t.TempDir() + "/ca_cert.pem"
+	certFile, err := os.Create(certPath)
+	if err != nil {
+		t.Errorf("can't create %s: %v", certPath, err)
+	}
+	defer certFile.Close()
+	err = pem.Encode(certFile, &pem.Block{
+		Type:   "CERTIFICATE",
+		Bytes:  caCert.Raw,
+	})
+	if err != nil {
+		t.Errorf("can't encode cert to %s: %v", certPath, err)
+	}
+	return certPath
+}
+
 func TestGCPCertSucceeds(t *testing.T) {
-	b, err := ioutil.ReadFile("/run/secrets/workload-spiffe-credentials/ca_certificates.pem")
+	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)
 	}
-	td, err := spiffeid.TrustDomainFromString("spiffe://sky-did-82840-desktop-6.svc.id.goog/ns/projector-ragost/sa/projector-ragost")
+	td, err := spiffeid.TrustDomainFromString("spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}
@@ -35,11 +119,12 @@ func TestGCPCertSucceeds(t *testing.T) {
 }
 
 func TestGCPCertFails(t *testing.T) {
-	b, err := ioutil.ReadFile("/run/secrets/workload-spiffe-credentials/ca_certificates.pem")
+	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)
 	}
-	td, err := spiffeid.TrustDomainFromString("spiffe://sky-did-82840-desktop-6.svc.id.goog/ns/projector-ragost/sa/projector-ragost")
+	td, err := spiffeid.TrustDomainFromString("spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}
@@ -48,7 +133,7 @@ func TestGCPCertFails(t *testing.T) {
 	if err != nil {
 		t.Errorf("can't parse bundle: %v", err)
 	}
-	src.Add(bundle, ".global.workload.id.goog")
+	src.Add(bundle, ".onprem.signed.goog")
 
 	foundBundle, err := src.GetX509BundleForTrustDomain(td)
 	if err == nil {
@@ -60,15 +145,17 @@ func TestGCPCertFails(t *testing.T) {
 }
 
 func TestMultiGCPCertSucceeds(t *testing.T) {
-	b, err := ioutil.ReadFile("/run/secrets/workload-spiffe-credentials/ca_certificates.pem")
+	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)
 	}
-	td1, err := spiffeid.TrustDomainFromString("spiffe://sky-did-82840-desktop-6.svc.id.goog/ns/projector-ragost/sa/projector-ragost")
+	td1, err := spiffeid.TrustDomainFromString("spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}
-	td2, err := spiffeid.TrustDomainFromString("spiffe://gsinet-gcp-wif-v1.60151081759.global.workload.id.goog/subject/ragost")
+	td2, err := spiffeid.TrustDomainFromString("spiffe://acme.com.onprem.signed.goog/ns/project-id/sa/system-acct")
+
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}
@@ -77,7 +164,7 @@ func TestMultiGCPCertSucceeds(t *testing.T) {
 	if err != nil {
 		t.Errorf("can't parse bundle: %v", err)
 	}
-	src.Add(bundle, ".svc.id.goog", ".global.workload.id.goog")
+	src.Add(bundle, ".svc.id.goog", ".onprem.signed.goog")
 
 	foundBundle, err := src.GetX509BundleForTrustDomain(td1)
 	if err != nil {
@@ -97,13 +184,13 @@ func TestMultiGCPCertSucceeds(t *testing.T) {
 
 func TestSubstringMatchesAtMostOneTrustDomain(t *testing.T) {
 	var tds []string
-	patterns := [...]string{".svc.id.goog", ".global.workload.id.goog"}
-	td, err := spiffeid.TrustDomainFromString("spiffe://sky-did-82840-desktop-6.svc.id.goog/ns/projector-ragost/sa/projector-ragost")
+	patterns := [...]string{".svc.id.goog", ".onprem.signed.goog"}
+	td, err := spiffeid.TrustDomainFromString("spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}
 	tds = append(tds, td.String())
-	td, err = spiffeid.TrustDomainFromString("spiffe://gsinet-gcp-wif-v1.60151081759.global.workload.id.goog/subject/ragost")
+	td, err = spiffeid.TrustDomainFromString("spiffe://acme.com.onprem.signed.goog/ns/project-id/sa/system-acct")
 	if err != nil {
 		t.Errorf("can't convert string to trust domain: %v", err)
 	}

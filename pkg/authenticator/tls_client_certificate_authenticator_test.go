@@ -167,7 +167,7 @@ func TestTLSClientCertificateAuthenticator(t *testing.T) {
 						},
 					},
 				}))
-		require.Equal(
+		testutil.RequireEqualStatus(
 			t,
 			status.Error(codes.Unauthenticated, "Cannot validate TLS certificate: x509: certificate has expired or is not yet valid: current time 2023-11-14T22:13:20Z is after 2020-11-17T09:03:34Z"),
 			err)

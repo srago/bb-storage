@@ -8,6 +8,7 @@ import (
 	"github.com/buildbarn/bb-storage/internal/mock"
 	"github.com/buildbarn/bb-storage/pkg/builder"
 	"github.com/buildbarn/bb-storage/pkg/digest"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +27,7 @@ func TestDemultiplexingBuildQueueGetCapabilities(t *testing.T) {
 		_, err := demultiplexingBuildQueue.GetCapabilities(ctx, &remoteexecution.GetCapabilitiesRequest{
 			InstanceName: "hello/blobs/world",
 		})
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
 	})
 
 	t.Run("NonexistentInstanceName", func(t *testing.T) {
@@ -39,7 +40,7 @@ func TestDemultiplexingBuildQueueGetCapabilities(t *testing.T) {
 		_, err := demultiplexingBuildQueue.GetCapabilities(ctx, &remoteexecution.GetCapabilitiesRequest{
 			InstanceName: "Nonexistent backend",
 		})
-		require.Equal(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
 	})
 
 	t.Run("BackendFailure", func(t *testing.T) {
@@ -101,7 +102,7 @@ func TestDemultiplexingBuildQueueExecute(t *testing.T) {
 				SizeBytes: 0,
 			},
 		}, executeServer)
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
 	})
 
 	t.Run("NonexistentInstanceName", func(t *testing.T) {
@@ -119,7 +120,7 @@ func TestDemultiplexingBuildQueueExecute(t *testing.T) {
 				SizeBytes: 0,
 			},
 		}, executeServer)
-		require.Equal(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
 	})
 
 	t.Run("BackendFailure", func(t *testing.T) {
@@ -216,7 +217,7 @@ func TestDemultiplexingBuildQueueWaitExecution(t *testing.T) {
 		err := demultiplexingBuildQueue.WaitExecution(&remoteexecution.WaitExecutionRequest{
 			Name: "Nonexistent backend/operations/df4ab561-4e81-48c7-a387-edc7d899a76f",
 		}, waitExecutionServer)
-		require.Equal(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.NotFound, "Failed to obtain backend for instance name \"Nonexistent backend\": Backend not found"), err)
 	})
 
 	t.Run("BackendFailure", func(t *testing.T) {

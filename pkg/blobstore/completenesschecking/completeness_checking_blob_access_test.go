@@ -57,7 +57,7 @@ func TestCompletenessCheckingBlobAccess(t *testing.T) {
 				buffer.BackendProvided(dataIntegrityCallback.Call)))
 
 		_, err := completenessCheckingBlobAccess.Get(ctx, actionDigest).ToProto(&remoteexecution.ActionResult{}, 1000)
-		require.Equal(t, err, status.Error(codes.NotFound, "Action result contained malformed digest: Unknown digest hash length: 24 characters"))
+		testutil.RequireEqualStatus(t, status.Error(codes.NotFound, "Action result contained malformed digest: Unknown digest hash length: 24 characters"), err)
 	})
 
 	t.Run("MissingInput", func(t *testing.T) {
@@ -114,7 +114,7 @@ func TestCompletenessCheckingBlobAccess(t *testing.T) {
 		).Return(digest.EmptySet, status.Error(codes.Internal, "Hard disk has a case of the Mondays"))
 
 		_, err := completenessCheckingBlobAccess.Get(ctx, actionDigest).ToProto(&remoteexecution.ActionResult{}, 1000)
-		require.Equal(t, err, status.Error(codes.Internal, "Failed to determine existence of child objects: Hard disk has a case of the Mondays"))
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Failed to determine existence of child objects: Hard disk has a case of the Mondays"), err)
 	})
 
 	t.Run("GetTreeError", func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestCompletenessCheckingBlobAccess(t *testing.T) {
 		).Return(buffer.NewBufferFromError(status.Error(codes.Internal, "Hard disk has a case of the Mondays")))
 
 		_, err := completenessCheckingBlobAccess.Get(ctx, actionDigest).ToProto(&remoteexecution.ActionResult{}, 1000)
-		require.Equal(t, err, status.Error(codes.Internal, "Failed to fetch output directory \"bazel-out/foo\": Hard disk has a case of the Mondays"))
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Failed to fetch output directory \"bazel-out/foo\": Hard disk has a case of the Mondays"), err)
 	})
 
 	t.Run("Success", func(t *testing.T) {

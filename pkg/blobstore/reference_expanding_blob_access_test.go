@@ -17,6 +17,7 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/blobstore/buffer"
 	"github.com/buildbarn/bb-storage/pkg/digest"
 	"github.com/buildbarn/bb-storage/pkg/proto/icas"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
@@ -43,7 +44,7 @@ func TestReferenceExpandingBlobAccessGet(t *testing.T) {
 			Return(buffer.NewBufferFromError(status.Error(codes.Internal, "I/O error")))
 
 		_, err := blobAccess.Get(ctx, helloDigest).ToByteSlice(100)
-		require.Equal(t, status.Error(codes.Internal, "Failed to load reference: I/O error"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Failed to load reference: I/O error"), err)
 	})
 
 	t.Run("InvalidReference", func(t *testing.T) {
@@ -73,7 +74,7 @@ func TestReferenceExpandingBlobAccessGet(t *testing.T) {
 				buffer.BackendProvided(buffer.Irreparable(helloDigest))))
 
 		_, err := blobAccess.Get(ctx, helloDigest).ToByteSlice(100)
-		require.Equal(t, status.Error(codes.Internal, "Failed to create HTTP request: parse \"\\x00\": net/url: invalid control character in URL"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Failed to create HTTP request: parse \"\\x00\": net/url: invalid control character in URL"), err)
 	})
 
 	t.Run("HTTPRequestFailed", func(t *testing.T) {
@@ -91,7 +92,7 @@ func TestReferenceExpandingBlobAccessGet(t *testing.T) {
 		roundTripper.EXPECT().RoundTrip(gomock.Any()).Return(nil, errors.New("dial tcp 1.2.3.4:80: connect: connection refused"))
 
 		_, err := blobAccess.Get(ctx, helloDigest).ToByteSlice(100)
-		require.Equal(t, status.Error(codes.Internal, "HTTP request failed: Get \"http://example.com/file.txt\": dial tcp 1.2.3.4:80: connect: connection refused"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "HTTP request failed: Get \"http://example.com/file.txt\": dial tcp 1.2.3.4:80: connect: connection refused"), err)
 	})
 
 	t.Run("HTTPBadStatusCode", func(t *testing.T) {
@@ -208,7 +209,7 @@ func TestReferenceExpandingBlobAccessGet(t *testing.T) {
 		})
 
 		_, err := blobAccess.Get(ctx, helloDigest).ToByteSlice(100)
-		require.Equal(t, status.Error(codes.Internal, "S3 request failed: NoSuchKey: The specified key does not exist. status code: 404, request id: ..., host id: ..."), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "S3 request failed: NoSuchKey: The specified key does not exist. status code: 404, request id: ..., host id: ..."), err)
 	})
 
 	t.Run("S3DeflateError", func(t *testing.T) {

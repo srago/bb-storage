@@ -27,7 +27,7 @@ func TestAuthorizingBuildQueueGetCapabilities(t *testing.T) {
 		_, err := authorizingBuildQueue.GetCapabilities(ctx, &remoteexecution.GetCapabilitiesRequest{
 			InstanceName: "hello/blobs/world",
 		})
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
 	})
 
 	t.Run("NotAuthorized", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestAuthorizingBuildQueueExecute(t *testing.T) {
 				SizeBytes: 0,
 			},
 		}, executeServer)
-		require.Equal(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"hello/blobs/world\": Instance name contains reserved keyword \"blobs\""), err)
 	})
 
 	t.Run("Denied", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestAuthorizingBuildQueueExecute(t *testing.T) {
 				SizeBytes: 0,
 			},
 		}, executeServer)
-		require.Equal(t, status.Error(codes.PermissionDenied, "Failed to authorize to Execute() against instance name \"hello/world\": Permission denied"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.PermissionDenied, "Failed to authorize to Execute() against instance name \"hello/world\": Permission denied"), err)
 	})
 
 	t.Run("Allowed", func(t *testing.T) {

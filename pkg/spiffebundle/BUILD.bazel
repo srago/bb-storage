@@ -16,6 +16,7 @@ go_test(
     srcs = ["source_test.go"],
     embed = [":spiffebundle"],
     deps = [
+        "//pkg/clock",
         "@com_github_spiffe_go_spiffe_v2//bundle/x509bundle",
         "@com_github_spiffe_go_spiffe_v2//spiffeid",
     ],

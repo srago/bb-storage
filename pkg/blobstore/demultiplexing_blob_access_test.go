@@ -8,6 +8,7 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/blobstore"
 	"github.com/buildbarn/bb-storage/pkg/blobstore/buffer"
 	"github.com/buildbarn/bb-storage/pkg/digest"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
@@ -53,7 +54,7 @@ func TestDemultiplexingBlobAccessGet(t *testing.T) {
 			ctx,
 			digest.MustNewDigest("hello/world", "8b1a9953c4611296a827abf8c47804d7", 5),
 		).ToByteSlice(100)
-		require.Equal(t, status.Error(codes.Internal, "Backend \"Primary\": Server on fire"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Backend \"Primary\": Server on fire"), err)
 	})
 
 	t.Run("Success", func(t *testing.T) {
@@ -116,7 +117,7 @@ func TestDemultiplexingBlobAccessPut(t *testing.T) {
 				return status.Error(codes.Internal, "I/O error")
 			})
 
-		require.Equal(
+		testutil.RequireEqualStatus(
 			t,
 			status.Error(codes.Internal, "Backend \"Primary\": I/O error"),
 			blobAccess.Put(
@@ -195,7 +196,7 @@ func TestDemultiplexingBlobAccessFindMissing(t *testing.T) {
 				Add(digest.MustNewDigest("hello/world", "8b1a9953c4611296a827abf8c47804d7", 5)).
 				Add(digest.MustNewDigest("hello/world", "6fc422233a40a75a1f028e11c3cd1140", 7)).
 				Build())
-		require.Equal(t, status.Error(codes.Internal, "Backend \"Primary\": I/O error"), err)
+		testutil.RequireEqualStatus(t, status.Error(codes.Internal, "Backend \"Primary\": I/O error"), err)
 	})
 
 	t.Run("Success", func(t *testing.T) {

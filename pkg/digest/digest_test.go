@@ -5,6 +5,7 @@ import (
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/digest"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
@@ -30,7 +31,7 @@ func TestNewDigestFromByteStreamReadPath(t *testing.T) {
 
 	t.Run("InvalidInstanceName", func(t *testing.T) {
 		_, _, err := digest.NewDigestFromByteStreamReadPath("x/operations/y/blobs/8b1a9953c4611296a827abf8c47804d7/123")
-		require.Equal(t, err, status.Error(codes.InvalidArgument, "Invalid instance name \"x/operations/y\": Instance name contains reserved keyword \"operations\""))
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"x/operations/y\": Instance name contains reserved keyword \"operations\""), err)
 	})
 
 	t.Run("UnknownCompressionMethod", func(t *testing.T) {
@@ -99,7 +100,7 @@ func TestNewDigestFromByteStreamWritePath(t *testing.T) {
 
 	t.Run("InvalidInstanceName", func(t *testing.T) {
 		_, _, err := digest.NewDigestFromByteStreamWritePath("x/operations/y/uploads/da2f1135-326b-4956-b920-1646cdd6cb53/blobs/8b1a9953c4611296a827abf8c47804d7/123")
-		require.Equal(t, err, status.Error(codes.InvalidArgument, "Invalid instance name \"x/operations/y\": Instance name contains reserved keyword \"operations\""))
+		testutil.RequireEqualStatus(t, status.Error(codes.InvalidArgument, "Invalid instance name \"x/operations/y\": Instance name contains reserved keyword \"operations\""), err)
 	})
 
 	t.Run("UnknownCompressionMethod", func(t *testing.T) {

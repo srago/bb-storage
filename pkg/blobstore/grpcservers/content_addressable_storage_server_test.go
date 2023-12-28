@@ -9,6 +9,7 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/blobstore/buffer"
 	"github.com/buildbarn/bb-storage/pkg/blobstore/grpcservers"
 	"github.com/buildbarn/bb-storage/pkg/digest"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
@@ -57,7 +58,7 @@ func TestContentAddressableStorageServerBatchReadBlobsSuccess(t *testing.T) {
 
 	response, err := contentAddressableStorageServer.BatchReadBlobs(ctx, request)
 	require.NoError(t, err)
-	require.Equal(t, &remoteexecution.BatchReadBlobsResponse{
+	testutil.RequireEqualProto(t, &remoteexecution.BatchReadBlobsResponse{
 		Responses: []*remoteexecution.BatchReadBlobsResponse_Response{
 			{
 				Digest: &remoteexecution.Digest{
