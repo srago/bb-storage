@@ -1,99 +1,18 @@
 package spiffebundle
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"io/ioutil"
-	"math/big"
-	"net/url"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/buildbarn/bb-storage/pkg/clock"
+	"github.com/buildbarn/bb-storage/pkg/testutil"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
-func newSPIFFECaCertAndKey(td spiffeid.TrustDomain) (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	u, err := url.Parse(td.IDString())
-	if err != nil {
-		return nil, nil, err
-	}
-	now := clock.SystemClock.Now()
-	name := pkix.Name{
-		Country:      []string{"US"},
-		Organization: []string{"Acme Corp."},
-	}
-	cert := &x509.Certificate{
-		Subject:               name,
-		Issuer:                name,
-		IsCA:                  true,
-		NotBefore:             now,
-		NotAfter:              now.Add(1 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		URIs:                  []*url.URL{u},
-	}
-	cert, key, err := signCert(cert)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cert, key, nil
-}
-
-func signCert(req *x509.Certificate) (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	publicKey := privateKey.Public()
-	req.SerialNumber, _ = rand.Int(rand.Reader, big.NewInt(666))
-
-	certData, err := x509.CreateCertificate(rand.Reader, req, req, publicKey, privateKey)  // self-sign
-	if err != nil {
-		return nil, nil, err
-	}
-	cert, err := x509.ParseCertificate(certData)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cert, privateKey, nil
-}
-
-func makeCaPemFile(t *testing.T, spiffeId string) (string) {
-	td, err := spiffeid.TrustDomainFromString(spiffeId)
-	if err != nil {
-		t.Errorf("can't extract SPIFFE ID: %v", err)
-	}
-	caCert, _, err := newSPIFFECaCertAndKey(td)
-	if err != nil {
-		t.Errorf("can't create CA cert & key: %v", err)
-	}
-	certPath := t.TempDir() + "/ca_cert.pem"
-	certFile, err := os.Create(certPath)
-	if err != nil {
-		t.Errorf("can't create %s: %v", certPath, err)
-	}
-	defer certFile.Close()
-	err = pem.Encode(certFile, &pem.Block{
-		Type:   "CERTIFICATE",
-		Bytes:  caCert.Raw,
-	})
-	if err != nil {
-		t.Errorf("can't encode cert to %s: %v", certPath, err)
-	}
-	return certPath
-}
-
 func TestGCPCertSucceeds(t *testing.T) {
-	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	filename := testutil.MakeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)
@@ -119,7 +38,7 @@ func TestGCPCertSucceeds(t *testing.T) {
 }
 
 func TestGCPCertFails(t *testing.T) {
-	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	filename := testutil.MakeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)
@@ -145,7 +64,7 @@ func TestGCPCertFails(t *testing.T) {
 }
 
 func TestMultiGCPCertSucceeds(t *testing.T) {
-	filename := makeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
+	filename := testutil.MakeCaPemFile(t, "spiffe://acme.com.svc.id.goog/ns/project-id/sa/system-acct")
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("can't read creds: %v", err)

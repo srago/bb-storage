@@ -27,10 +27,15 @@ go_library(
 
 go_test(
     name = "bb_tls_test",
-    srcs = ["tls_test.go"],
+    srcs = [
+        "spiffe_tls_test.go",
+        "tls_test.go",
+    ],
     deps = [
         ":bb_tls",
         "//pkg/proto/configuration/tls",
+        "//pkg/proto/configuration/grpc",
+        "//pkg/proto/configuration/spiffe",
         "//pkg/testutil",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//codes",
