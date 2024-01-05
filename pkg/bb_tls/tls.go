@@ -1,4 +1,4 @@
-package util
+package bb_tls
 
 import (
 	"crypto/tls"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls"
+	"github.com/buildbarn/bb-storage/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"google.golang.org/grpc/codes"
@@ -97,7 +98,7 @@ func refreshTLSCertOnInterval(cert *RotatingTLSCertificate, refreshInterval *dur
 	updateTLSCertificateExpiry(cert.GetCertificate(), certificateUsage)
 
 	if err := refreshInterval.CheckValid(); err != nil {
-		return StatusWrap(err, "Failed to parse refresh interval")
+		return util.StatusWrap(err, "Failed to parse refresh interval")
 	}
 
 	// TODO: Run this as part of the program.Group, so that it gets
@@ -125,7 +126,7 @@ func registerTLSCertificate(tlsKeyPair *pb.X509KeyPair, certificateUsage string)
 	case *pb.X509KeyPair_Inline_:
 		cert, err := tls.X509KeyPair([]byte(keyPair.Inline.Certificate), []byte(keyPair.Inline.PrivateKey))
 		if err != nil {
-			return nil, StatusWrap(err, "Invalid certificate or private key")
+			return nil, util.StatusWrap(err, "Invalid certificate or private key")
 		}
 		updateTLSCertificateExpiry(&cert, certificateUsage)
 		return func() *tls.Certificate { return &cert }, nil
@@ -133,7 +134,7 @@ func registerTLSCertificate(tlsKeyPair *pb.X509KeyPair, certificateUsage string)
 	case *pb.X509KeyPair_Files_:
 		cert := NewRotatingTLSCertificate(keyPair.Files.CertificatePath, keyPair.Files.PrivateKeyPath)
 		if err := refreshTLSCertOnInterval(cert, keyPair.Files.RefreshInterval, certificateUsage); err != nil {
-			return nil, StatusWrap(err, "Failed to initialize certificate")
+			return nil, util.StatusWrap(err, "Failed to initialize certificate")
 		}
 		return cert.GetCertificate, nil
 	default:
@@ -165,7 +166,7 @@ func NewTLSConfigFromClientConfiguration(configuration *pb.ClientConfiguration) 
 	if configuration.ClientKeyPair != nil {
 		getLatestCert, err := registerTLSCertificate(configuration.ClientKeyPair, tlsCertificateUsageClient)
 		if err != nil {
-			return nil, StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure client TLS")
+			return nil, util.StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure client TLS")
 		}
 		tlsConfig.GetClientCertificate = func(chi *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			return getLatestCert(), nil
@@ -208,13 +209,13 @@ func NewTLSConfigFromServerConfiguration(configuration *pb.ServerConfiguration, 
 	}
 
 	if configuration.ServerKeyPair == nil {
-		return nil, StatusWrapWithCode(err, codes.InvalidArgument, "Missing server_key_pair configuration")
+		return nil, util.StatusWrapWithCode(err, codes.InvalidArgument, "Missing server_key_pair configuration")
 	}
 
 	// Require the use of server-side certificates.
 	getLatestCert, err := registerTLSCertificate(configuration.ServerKeyPair, tlsCertificateUsageServer)
 	if err != nil {
-		return nil, StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure server TLS")
+		return nil, util.StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure server TLS")
 	}
 	tlsConfig.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return getLatestCert(), nil

@@ -6,7 +6,10 @@ proto_library(
     name = "tls_proto",
     srcs = ["tls.proto"],
     visibility = ["//visibility:public"],
-    deps = ["@protobuf//:duration_proto"],
+    deps = [
+        "@com_google_protobuf//:duration_proto",
+        "//pkg/proto/configuration/spiffe:spiffe_proto",
+    ],
 )
 
 go_proto_library(
@@ -14,6 +17,9 @@ go_proto_library(
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls",
     proto = ":tls_proto",
     visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/proto/configuration/spiffe",
+    ],
 )
 
 go_library(
