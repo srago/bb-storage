@@ -8,7 +8,7 @@ proto_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/proto/configuration/spiffe:spiffe_proto",
-        "@com_google_protobuf//:empty_proto",
+        "@protobuf//:empty_proto",
     ],
 )
 

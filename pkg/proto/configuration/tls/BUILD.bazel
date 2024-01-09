@@ -7,7 +7,7 @@ proto_library(
     srcs = ["tls.proto"],
     visibility = ["//visibility:public"],
     deps = [
-        "@com_google_protobuf//:duration_proto",
+        "@protobuf//:duration_proto",
         "//pkg/proto/configuration/spiffe:spiffe_proto",
     ],
 )
