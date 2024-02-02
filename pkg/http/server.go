@@ -2,11 +2,34 @@ package http
 
 import (
 	"context"
+	"crypto"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"io/ioutil"
+	"log"
 	"net/http"
+	"sync"
+	"time"
 
+	"github.com/buildbarn/bb-storage/pkg/bb_tls"
 	"github.com/buildbarn/bb-storage/pkg/program"
 	configuration "github.com/buildbarn/bb-storage/pkg/proto/configuration/http"
 	"github.com/buildbarn/bb-storage/pkg/util"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+type certInfo struct {
+	mu         sync.Mutex
+	x509Certs  []*x509.Certificate
+	privateKey crypto.Signer
+}
+
+var (
+	ci certInfo
 )
 
 // NewServersFromConfigurationAndServe spawns HTTP servers as part of a
@@ -21,7 +44,6 @@ func NewServersFromConfigurationAndServe(configurations []*configuration.ServerC
 				return err
 			}
 			authenticatedHandler := NewAuthenticatingHandler(handler, authenticator)
-
 			tlsConfig, err := util.NewTLSConfigFromServerConfiguration(
 				configuration.Tls,
 				/* requestClientCertificate = */ false,

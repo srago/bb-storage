@@ -55,7 +55,8 @@ message ServerConfiguration {
   // store the username or sets of permissions.
   AuthenticationPolicy authentication_policy = 2;
 
-  // TLS configuration. TLS is not enabled when left unset.
+  // Optional TLS configuration for the BuildBarn HTTP servers.
+  // TLS is not enabled when left unset.
   buildbarn.configuration.tls.ServerConfiguration tls = 3;
 }
 
