@@ -720,12 +720,20 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 		}
 	}
 	now := time.Now().UTC()
+	var spanBuf, gcsBuf buffer.Buffer
+	if size <= maxSize && ba.copySmallBlobsToGcs {
+		spanBuf, gcsBuf = b.CloneCopy(int(size))
+	} else {
+		// Only one of these will be used.
+		spanBuf = b
+		gcsBuf = b
+	}
 	if size > maxSize || ba.copySmallBlobsToGcs {
 		obj := ba.gcsBucket.Object(key)
 		w := obj.NewWriter(ctx)
 		start := time.Now()
 		var err error
-		if _, err = io.Copy(w, b.ToReader()); err == nil {
+		if _, err = io.Copy(w, gcsBuf.ToReader()); err == nil {
 			if err = w.Close(); err != nil {
 				log.Printf("Blob %s can't be copied to GCS, close failed: %v", digest, err)
 			}
@@ -741,13 +749,16 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 			} else {
 				gcsPutFailedOtherCount.Inc()
 			}
+			if spanBuf != gcsBuf {
+				spanBuf.Discard()
+			}
 			return err
 		}
 		inlineData = nil
 		ba.touchGCSObject(context.Background(), key, now)
 	}
 	if size <= maxSize {
-		inlineData, err = b.ToByteSlice(int(maxSize))
+		inlineData, err = spanBuf.ToByteSlice(int(maxSize))
 		if err != nil {
 			log.Printf("Blob %s can't be copied to Spanner: %v", digest, err)
 
