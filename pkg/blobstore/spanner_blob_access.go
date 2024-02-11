@@ -197,12 +197,13 @@ type spannerBlobAccess struct {
 	spannerClient *spanner.Client
 	gcsBucket     *storage.BucketHandle
 
-	readBufferFactory ReadBufferFactory
-	storageType       pb.StorageType_Value
-	daysToLive        uint64        // to avoid converting back and forth
-	expirationAge     time.Duration // same as above, but easier for time calculations
-	refUpdateThresh   time.Duration // when we start updating ReferenceTime
-	refChan           chan string
+	readBufferFactory   ReadBufferFactory
+	storageType         pb.StorageType_Value
+	daysToLive          uint64        // to avoid converting back and forth
+	expirationAge       time.Duration // same as above, but easier for time calculations
+	refUpdateThresh     time.Duration // when we start updating ReferenceTime
+	refChan             chan string
+	copySmallBlobsToGcs bool
 }
 
 type spannerRecord struct {
@@ -407,7 +408,7 @@ func (ba *spannerBlobAccess) keyToBlobSize(key string) (int64, error) {
 }
 
 // NewSpannerBlobAccess creates a BlobAccess that uses Spanner and GCS as its backing store.
-func NewSpannerBlobAccess(databaseName string, gcsBucketName string, readBufferFactory ReadBufferFactory, storageType pb.StorageType_Value, daysToLive uint64) (BlobAccess, error) {
+func NewSpannerBlobAccess(databaseName string, gcsBucketName string, readBufferFactory ReadBufferFactory, storageType pb.StorageType_Value, daysToLive uint64, copySmallBlobsToGcs bool) (BlobAccess, error) {
 	// If daysToLive is zero, use the default.
 	if daysToLive == 0 {
 		daysToLive = defaultDaysToLive
@@ -531,18 +532,20 @@ func NewSpannerBlobAccess(databaseName string, gcsBucketName string, readBufferF
 	var refCh chan string
 	if storageType == pb.StorageType_ACTION_CACHE {
 		refCh = make(chan string, maxRefBulkSz)
+		copySmallBlobsToGcs = false // Don't support this -- blobs in the AC are mutable
 	}
 
 	ba := &spannerBlobAccess{
 		spannerClient: spannerClient,
 		gcsBucket:     gcsBucket,
 
-		readBufferFactory: readBufferFactory,
-		storageType:       storageType,
-		daysToLive:        daysToLive,
-		expirationAge:     expirationAge,
-		refUpdateThresh:   refUpdateThresh,
-		refChan:           refCh,
+		readBufferFactory:   readBufferFactory,
+		storageType:         storageType,
+		daysToLive:          daysToLive,
+		expirationAge:       expirationAge,
+		refUpdateThresh:     refUpdateThresh,
+		refChan:             refCh,
+		copySmallBlobsToGcs: copySmallBlobsToGcs,
 	}
 	if refCh != nil {
 		go ba.bulkUpdate(refCh)
@@ -565,7 +568,7 @@ func (ba *spannerBlobAccess) delete(ctx context.Context, key string) error {
 	}
 
 	// Now if it was also in GCS, delete it there
-	if sz > maxSize {
+	if sz > maxSize || ba.copySmallBlobsToGcs {
 		object := ba.gcsBucket.Object(key)
 		start := time.Now()
 		err = object.Delete(ctx)
@@ -629,6 +632,15 @@ func (ba *spannerBlobAccess) Get(ctx context.Context, digest digest.Digest) buff
 			} else {
 				spannerMalformedBlobDeleteFailedCount.WithLabelValues(beType).Inc()
 				log.Printf("Blob %s was malformed and could not be deleted from Spanner/GCS: %v", digest.String(), err)
+			}
+			if ba.copySmallBlobsToGcs && sz <= maxSize {
+				if err := ba.delete(ctx, key); err == nil {
+					spannerMalformedBlobDeletedCount.WithLabelValues(BE_GCS).Inc()
+					log.Printf("Blob %s was malformed and has been deleted from GCS successfully", digest.String())
+				} else {
+					spannerMalformedBlobDeleteFailedCount.WithLabelValues(BE_GCS).Inc()
+					log.Printf("Blob %s was malformed and could not be deleted from /GCS: %v", digest.String(), err)
+				}
 			}
 		}
 	}
@@ -708,7 +720,7 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 		}
 	}
 	now := time.Now().UTC()
-	if size > maxSize {
+	if size > maxSize || ba.copySmallBlobsToGcs {
 		obj := ba.gcsBucket.Object(key)
 		w := obj.NewWriter(ctx)
 		start := time.Now()
@@ -733,10 +745,19 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 		}
 		inlineData = nil
 		ba.touchGCSObject(context.Background(), key, now)
-	} else {
+	}
+	if size <= maxSize {
 		inlineData, err = b.ToByteSlice(int(maxSize))
 		if err != nil {
 			log.Printf("Blob %s can't be copied to Spanner: %v", digest, err)
+
+			/*
+			 * We could probably delete the blob from GCS, but that won't make much
+			 * difference -- you can't access it from spanner_blob_access's Get function
+			 * without it having an entry in Spanner.  Anyone trying to access it from
+			 * GCS-FUSE could find it, however, but it's not clear that would actually
+			 * break anything.
+			 */
 			return err
 		}
 		if len(inlineData) == 0 {
@@ -766,7 +787,7 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 	return nil
 }
 
-// This function is only supported for CAS objects.
+// This function is only supported for CAS objects.  Spanner acts as the source of truth for block existence.
 func (ba *spannerBlobAccess) FindMissing(ctx context.Context, digests digest.Set) (digest.Set, error) {
 	if err := util.StatusFromContext(ctx); err != nil {
 		return digest.EmptySet, err
@@ -841,7 +862,7 @@ func (ba *spannerBlobAccess) FindMissing(ctx context.Context, digests digest.Set
 			if err != nil {
 				spannerMalformedKeyCount.Inc()
 				log.Printf("Couldn't extract size from key %s: %v", key, sz)
-			} else if sz > maxSize {
+			} else if sz > maxSize || ba.copySmallBlobsToGcs {
 				ba.touchGCSObject(context.Background(), key, now)
 			}
 			ksl = append(ksl, key)

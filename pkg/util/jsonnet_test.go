@@ -138,7 +138,7 @@ func TestUnmarshalConfigurationFromFile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := t.TempDir()
-			confFile := path.Join(td, "bb_storange.jsonnet")
+			confFile := path.Join(td, "bb_storage.jsonnet")
 			ioutil.WriteFile(confFile, []byte(tt.args.configuration), 0o644)
 			if err := UnmarshalConfigurationFromFile(confFile, tt.args.confproto); (err != nil) != tt.wantErr {
 				t.Errorf("UnmarshalConfigurationFromFile() error = %v, wantErr %v", err, tt.wantErr)

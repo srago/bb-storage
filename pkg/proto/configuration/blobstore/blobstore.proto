@@ -400,6 +400,11 @@ message SpannerBlobAccessConfiguration {
 
   // Expiration time in days.  The default is 7 days.
   uint64 expiration_days = 4;
+
+  // Set to true to copy CAS small objects to GCS in addition to Spanner.  This
+  // is useful when you use the GCS-FUSE file system to read from BuildBarn's CAS.
+  // AC blobs are NOT copied to GCS.
+  bool copy_small_blobs_to_gcs = 5;
 }
 
 // LocalBlobAccess stores all data onto disk in block sizes. A block

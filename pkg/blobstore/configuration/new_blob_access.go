@@ -197,7 +197,8 @@ func newNestedBlobAccessBare(configuration *pb.BlobAccessConfiguration, creator 
 			backend.Spanner.GcsBucketName,
 			readBufferFactory,
 			backend.Spanner.StorageType,
-			backend.Spanner.ExpirationDays)
+			backend.Spanner.ExpirationDays,
+			backend.Spanner.CopySmallBlobsToGcs)
 		if err != nil {
 			return BlobAccessInfo{}, "", util.StatusWrap(err, "Failed to create Spanner blob access")
 		}
