@@ -22,16 +22,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type certInfo struct {
-	mu         sync.Mutex
-	x509Certs  []*x509.Certificate
-	privateKey crypto.Signer
-}
-
-var (
-	ci certInfo
-)
-
 // NewServersFromConfigurationAndServe spawns HTTP servers as part of a
 // program.Group, based on a configuration message. The web servers are
 // automatically terminated if the context associated with the group is
