@@ -142,6 +142,34 @@ func (nc *simpleNestedBlobAccessCreator) newNestedBlobAccessBare(configuration *
 			BlobAccess:      mirrored.NewMirroredBlobAccess(backendA.BlobAccess, backendB.BlobAccess, replicatorAToB, replicatorBToA),
 			DigestKeyFormat: backendA.DigestKeyFormat.Combine(backendB.DigestKeyFormat),
 		}, "mirrored", nil
+	case *pb.BlobAccessConfiguration_TriMirrored:
+		backendA, err := nc.NewNestedBlobAccess(backend.TriMirrored.BackendA, creator)
+		if err != nil {
+			return BlobAccessInfo{}, "", err
+		}
+		backendB, err := nc.NewNestedBlobAccess(backend.TriMirrored.BackendB, creator)
+		if err != nil {
+			return BlobAccessInfo{}, "", err
+		}
+		backendC, err := nc.NewNestedBlobAccess(backend.TriMirrored.BackendC, creator)
+		if err != nil {
+			return BlobAccessInfo{}, "", err
+		}
+		var digestKeyFormat digest.KeyFormat
+		// TODO(ragost): see if this is sufficient instead of looking at the backend, or do we need to resort to
+		// DigestKeyFormat: backendA.DigestKeyFormat.Combine(backendB.DigestKeyFormat.Combine(backendC.DigestKeyFormat)),
+		if storageTypeName == "ac" {
+			digestKeyFormat = digest.KeyWithInstance
+		} else if storageTypeName == "cas" {
+			digestKeyFormat = digest.KeyWithoutInstance
+		} else {
+			return BlobAccessInfo{}, "", status.Errorf(codes.InvalidArgument, "Unknown TriMirrored storage type")
+		}
+
+		return BlobAccessInfo{
+			BlobAccess:      mirrored.NewTriMirroredBlobAccess(backendA.BlobAccess, backendB.BlobAccess, backendC.BlobAccess, storageTypeName),
+			DigestKeyFormat: digestKeyFormat,
+		}, "tri_mirrored", nil
 	case *pb.BlobAccessConfiguration_Local:
 		digestKeyFormat := digest.KeyWithInstance
 		if !backend.Local.HierarchicalInstanceNames {
