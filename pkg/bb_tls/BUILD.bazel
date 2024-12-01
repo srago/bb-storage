@@ -12,9 +12,6 @@ go_library(
     deps = [
         "//pkg/clock",
         "//pkg/grpcauth",
-        "//pkg/proto/configuration/grpc",
-        "//pkg/proto/configuration/spiffe",
-        "//pkg/proto/configuration/tls",
         "//pkg/spiffebundle",
         "//pkg/util",
         "@com_github_prometheus_client_golang//prometheus",
@@ -37,9 +34,6 @@ go_test(
     ],
     deps = [
         ":bb_tls",
-        "//pkg/proto/configuration/tls",
-        "//pkg/proto/configuration/grpc",
-        "//pkg/proto/configuration/spiffe",
         "//pkg/testutil",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//codes",

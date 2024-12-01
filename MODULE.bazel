@@ -15,6 +15,10 @@ bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "rules_proto", version = "7.0.2")
 bazel_dep(name = "toolchains_llvm", version = "1.2.0")
 
+#bazel_dep(name = "rules_nodejs", version = "6.3.0")
+#node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node", dev_dependency = True)
+#node.toolchain(node_version = "15.14.0")
+
 git_override(
     module_name = "bazel_remote_apis",
     commit = "253013303c9e1d52ebdeb5a3f0f869919e882f20",
@@ -43,6 +47,7 @@ use_repo(
     "com_github_bazelbuild_buildtools",
     "com_github_fxtlabs_primes",
     "com_github_go_jose_go_jose_v3",
+    "com_github_golang_mock",
     "com_github_google_uuid",
     "com_github_gorilla_mux",
     "com_github_grpc_ecosystem_go_grpc_middleware",
@@ -54,8 +59,10 @@ use_repo(
     "com_github_prometheus_client_model",
     "com_github_prometheus_common",
     "com_github_sercand_kuberesolver_v5",
+    "com_github_spiffe_go_spiffe_v2",
     "com_github_stretchr_testify",
     "com_google_cloud_go_longrunning",
+    "com_google_cloud_go_spanner",
     "com_google_cloud_go_storage",
     "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc",
     "io_opentelemetry_go_contrib_propagators_b3",

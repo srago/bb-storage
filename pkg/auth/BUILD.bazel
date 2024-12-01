@@ -16,8 +16,6 @@ go_library(
     deps = [
         "//pkg/digest",
         "//pkg/otel",
-        "//pkg/proto/auth",
-        "//pkg/proto/configuration/auth",
         "//pkg/util",
         "@com_github_jmespath_go_jmespath//:go-jmespath",
         "@com_github_spiffe_go_spiffe_v2//svid/x509svid",
@@ -43,7 +41,6 @@ go_test(
         ":auth",
         "//internal/mock",
         "//pkg/digest",
-        "//pkg/proto/auth",
         "//pkg/testutil",
         "@com_github_jmespath_go_jmespath//:go-jmespath",
         "@com_github_stretchr_testify//require",

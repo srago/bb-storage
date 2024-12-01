@@ -9,7 +9,6 @@ go_library(
     importpath = "github.com/buildbarn/bb-storage/pkg/cloud/gcp",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/proto/configuration/cloud/gcp",
         "@com_google_cloud_go_storage//:storage",
         "@org_golang_google_api//option",
     ],

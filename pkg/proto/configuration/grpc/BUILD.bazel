@@ -31,7 +31,13 @@ go_proto_library(
 
 go_library(
     name = "grpc",
-    embed = [":grpc_go_proto"],
+    srcs = ["grpc.pb.go"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/grpc",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/emptypb",
+    ],
 )

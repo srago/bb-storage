@@ -7,8 +7,8 @@ proto_library(
     srcs = ["tls.proto"],
     visibility = ["//visibility:public"],
     deps = [
-        "@protobuf//:duration_proto",
         "//pkg/proto/configuration/spiffe:spiffe_proto",
+        "@protobuf//:duration_proto",
     ],
 )
 
@@ -24,7 +24,12 @@ go_proto_library(
 
 go_library(
     name = "tls",
-    embed = [":tls_go_proto"],
+    srcs = ["tls.pb.go"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/durationpb",
+    ],
 )

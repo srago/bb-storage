@@ -1447,7 +1447,7 @@
     "@@rules_nodejs~//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "SqbzUarOVzAfK28Ca5+NIU3LUwnW/b3h0xXBUS97oyI=",
-        "usagesDigest": "22gCQJsD0hut3wVfZP7slMpyGCY5KmgPZplkzW7Et8Q=",
+        "usagesDigest": "gQXp/AAyjVedy2M0J3Qddw4xzR/awffGwVP/UdqZbL0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -1461,7 +1461,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "linux_amd64"
             }
@@ -1475,7 +1475,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "linux_arm64"
             }
@@ -1489,7 +1489,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "linux_s390x"
             }
@@ -1503,7 +1503,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "linux_ppc64le"
             }
@@ -1517,7 +1517,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "darwin_amd64"
             }
@@ -1531,7 +1531,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "darwin_arm64"
             }
@@ -1545,7 +1545,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "18.20.4",
+              "node_version": "15.14.0",
               "include_headers": false,
               "platform": "windows_amd64"
             }
@@ -5831,11 +5831,29 @@
     "@@toolchains_llvm~//toolchain/extensions:llvm.bzl%llvm": {
       "general": {
         "bzlTransitiveDigest": "dZkcElkfice3BvKPXtFwrvPABm8ac+SwfynSinwK4dQ=",
-        "usagesDigest": "RGRyKH5Di/ec1/LfuElXHlq/JFhYottwqc/ujQtgurQ=",
+        "usagesDigest": "cljRw6gHeBLYwx0TLbQKdsYNjXOH2RcnrHayjLBGsAE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
+          "llvm_toolchain_llvm": {
+            "bzlFile": "@@toolchains_llvm~//toolchain:rules.bzl",
+            "ruleClassName": "llvm",
+            "attributes": {
+              "alternative_llvm_sources": [],
+              "auth_patterns": {},
+              "distribution": "auto",
+              "exec_arch": "",
+              "exec_os": "",
+              "llvm_mirror": "",
+              "llvm_version": "14.0.0",
+              "llvm_versions": {},
+              "netrc": "",
+              "sha256": {},
+              "strip_prefix": {},
+              "urls": {}
+            }
+          },
           "llvm_toolchain": {
             "bzlFile": "@@toolchains_llvm~//toolchain:rules.bzl",
             "ruleClassName": "toolchain",
@@ -5865,24 +5883,6 @@
               "unfiltered_compile_flags": {},
               "toolchain_roots": {},
               "sysroot": {}
-            }
-          },
-          "llvm_toolchain_llvm": {
-            "bzlFile": "@@toolchains_llvm~//toolchain:rules.bzl",
-            "ruleClassName": "llvm",
-            "attributes": {
-              "alternative_llvm_sources": [],
-              "auth_patterns": {},
-              "distribution": "auto",
-              "exec_arch": "",
-              "exec_os": "",
-              "llvm_mirror": "",
-              "llvm_version": "14.0.0",
-              "llvm_versions": {},
-              "netrc": "",
-              "sha256": {},
-              "strip_prefix": {},
-              "urls": {}
             }
           }
         },

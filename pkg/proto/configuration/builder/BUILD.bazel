@@ -19,7 +19,11 @@ go_proto_library(
 
 go_library(
     name = "builder",
-    embed = [":builder_go_proto"],
+    srcs = ["builder.pb.go"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/builder",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
 )

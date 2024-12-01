@@ -31,7 +31,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",
-        "//pkg/bb_tls",
         "//pkg/blobstore/buffer",
         "//pkg/blobstore/slicing",
         "//pkg/capabilities",
@@ -40,10 +39,6 @@ go_library(
         "//pkg/cloud/gcp",
         "//pkg/digest",
         "//pkg/eviction",
-        "//pkg/proto/configuration/blobstore",
-        "//pkg/proto/fsac",
-        "//pkg/proto/icas",
-        "//pkg/proto/iscc",
         "//pkg/util",
         "@bazel_remote_apis//build/bazel/remote/execution/v2:remote_execution_go_proto",
         "@com_github_aws_aws_sdk_go_v2//aws",
@@ -52,10 +47,10 @@ go_library(
         "@com_github_prometheus_client_golang//prometheus",
         "@com_google_cloud_go_spanner//:spanner",
         "@com_google_cloud_go_spanner//admin/database/apiv1",
+        "@com_google_cloud_go_spanner//admin/database/apiv1/databasepb",
         "@com_google_cloud_go_storage//:storage",
         "@org_golang_google_api//iterator",
         "@org_golang_google_api//option",
-        "@org_golang_google_genproto//googleapis/spanner/admin/database/v1:database",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//encoding/protowire",
@@ -63,7 +58,6 @@ go_library(
         "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
-
 
 go_test(
     name = "blobstore_test",
@@ -88,7 +82,6 @@ go_test(
         "//pkg/blobstore/buffer",
         "//pkg/digest",
         "//pkg/eviction",
-        "//pkg/proto/icas",
         "//pkg/testutil",
         "@bazel_remote_apis//build/bazel/remote/execution/v2:remote_execution_go_proto",
         "@com_github_aws_aws_sdk_go_v2//aws",

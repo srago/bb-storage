@@ -28,7 +28,21 @@ go_proto_library(
 
 go_library(
     name = "iscc",
-    embed = [":iscc_go_proto"],
+    srcs = [
+        "iscc.pb.go",
+        "iscc_grpc.pb.go",
+    ],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/iscc",
     visibility = ["//visibility:public"],
+    deps = [
+        "@bazel_remote_apis//build/bazel/remote/execution/v2:remote_execution_go_proto",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/emptypb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
 )

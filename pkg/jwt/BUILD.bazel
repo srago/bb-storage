@@ -24,7 +24,6 @@ go_library(
         "//pkg/clock",
         "//pkg/eviction",
         "//pkg/program",
-        "//pkg/proto/configuration/jwt",
         "//pkg/random",
         "//pkg/util",
         "@com_github_go_jose_go_jose_v3//:go-jose",

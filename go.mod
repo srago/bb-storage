@@ -10,6 +10,7 @@ replace go.uber.org/mock => go.uber.org/mock v0.4.0
 
 require (
 	cloud.google.com/go/longrunning v0.6.2
+	cloud.google.com/go/spanner v1.72.0
 	cloud.google.com/go/storage v1.47.0
 	github.com/aohorodnyk/mimeheader v0.0.6
 	github.com/aws/aws-sdk-go-v2 v1.32.4
@@ -21,6 +22,7 @@ require (
 	github.com/bazelbuild/remote-apis v0.0.0-20241031050812-253013303c9e
 	github.com/fxtlabs/primes v0.0.0-20150821004651-dad82d10a449
 	github.com/go-jose/go-jose/v3 v3.0.3
+	github.com/golang/mock v1.6.0
 	github.com/google/go-jsonnet v0.20.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
@@ -33,6 +35,7 @@ require (
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.60.1
 	github.com/sercand/kuberesolver/v5 v5.1.1
+	github.com/spiffe/go-spiffe/v2 v2.0.0-beta.8
 	github.com/stretchr/testify v1.9.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.57.0
 	go.opentelemetry.io/contrib/propagators/b3 v1.32.0
@@ -64,6 +67,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.5.2 // indirect
 	cloud.google.com/go/iam v1.2.2 // indirect
 	cloud.google.com/go/monitoring v1.21.2 // indirect
+	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.25.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.49.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.49.0 // indirect
@@ -102,6 +106,7 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/zeebo/errs v1.2.2 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.32.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.57.0 // indirect

@@ -27,7 +27,11 @@ go_proto_library(
 
 go_library(
     name = "bb_replicator",
-    embed = [":bb_replicator_go_proto"],
+    srcs = ["bb_replicator.pb.go"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/bb_replicator",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
 )

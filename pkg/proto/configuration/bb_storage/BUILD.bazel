@@ -31,7 +31,11 @@ go_proto_library(
 
 go_library(
     name = "bb_storage",
-    embed = [":bb_storage_go_proto"],
+    srcs = ["bb_storage.pb.go"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/bb_storage",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
 )
