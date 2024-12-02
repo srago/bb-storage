@@ -17,6 +17,8 @@ go_library(
         "//pkg/digest",
         "//pkg/otel",
         "//pkg/util",
+        "//pkg/proto/auth",
+        "//pkg/proto/configuration/auth",
         "@com_github_jmespath_go_jmespath//:go-jmespath",
         "@com_github_spiffe_go_spiffe_v2//svid/x509svid",
         "@io_opentelemetry_go_otel//attribute",

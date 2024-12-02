@@ -71,7 +71,7 @@ func NewAuthenticatorFromConfiguration(policy *configuration.AuthenticationPolic
                 // validating the client's identity.
                 if policyKind.TlsClientCertificate.Spiffe != nil {
 			var m auth.AuthenticationMetadata
-			return NewAllowAuthenticator(&m), false, nil
+			return NewAllowAuthenticator(&m), true, true, nil
                 }
 		clientCAs := x509.NewCertPool()
 		if !clientCAs.AppendCertsFromPEM([]byte(policyKind.TlsClientCertificate.ClientCertificateAuthorities)) {

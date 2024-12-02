@@ -24,6 +24,8 @@ require (
 	github.com/go-jose/go-jose/v3 v3.0.3
 	github.com/golang/mock v1.6.0
 	github.com/google/go-jsonnet v0.20.0
+	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.0
+	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -67,7 +69,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.5.2 // indirect
 	cloud.google.com/go/iam v1.2.2 // indirect
 	cloud.google.com/go/monitoring v1.21.2 // indirect
-	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.25.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.49.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.49.0 // indirect

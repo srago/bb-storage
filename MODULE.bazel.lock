@@ -1447,7 +1447,7 @@
     "@@rules_nodejs~//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "SqbzUarOVzAfK28Ca5+NIU3LUwnW/b3h0xXBUS97oyI=",
-        "usagesDigest": "gQXp/AAyjVedy2M0J3Qddw4xzR/awffGwVP/UdqZbL0=",
+        "usagesDigest": "G+1DGeAxx8l7Y77HTX/dOj/f+mIz+O1haoKb+vMIes4=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -1461,7 +1461,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "linux_amd64"
             }
@@ -1475,7 +1475,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "linux_arm64"
             }
@@ -1489,7 +1489,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "linux_s390x"
             }
@@ -1503,7 +1503,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "linux_ppc64le"
             }
@@ -1517,7 +1517,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "darwin_amd64"
             }
@@ -1531,7 +1531,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "darwin_arm64"
             }
@@ -1545,7 +1545,7 @@
               "node_urls": [
                 "https://nodejs.org/dist/v{version}/{filename}"
               ],
-              "node_version": "15.14.0",
+              "node_version": "16.20.2",
               "include_headers": false,
               "platform": "windows_amd64"
             }

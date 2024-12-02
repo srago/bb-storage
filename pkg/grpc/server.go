@@ -82,7 +82,7 @@ func NewServersFromConfigurationAndServe(configurations []*configuration.ServerC
 				}
 			}
 		} else {
-			if tlsConfig, err := bb_tls.NewTLSConfigFromServerConfiguration(configuration.Tls, requestTLSClientCertificate); err != nil {
+			if tlsConfig, err = bb_tls.NewTLSConfigFromServerConfiguration(configuration.Tls, requestTLSClientCertificate); err != nil {
 				return err
 			}
 		}

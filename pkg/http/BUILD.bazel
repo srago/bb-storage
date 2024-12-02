@@ -26,6 +26,8 @@ go_library(
         "//pkg/clock",
         "//pkg/jwt",
         "//pkg/program",
+        "//pkg/proto/configuration/http",
+        "//pkg/proto/http/oidc",
         "//pkg/random",
         "//pkg/util",
         "@com_github_aohorodnyk_mimeheader//:mimeheader",

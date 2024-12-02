@@ -24,12 +24,7 @@ go_proto_library(
 
 go_library(
     name = "tls",
-    srcs = ["tls.pb.go"],
+    embed = [":tls_go_proto"],
     importpath = "github.com/buildbarn/bb-storage/pkg/proto/configuration/tls",
     visibility = ["//visibility:public"],
-    deps = [
-        "@org_golang_google_protobuf//reflect/protoreflect",
-        "@org_golang_google_protobuf//runtime/protoimpl",
-        "@org_golang_google_protobuf//types/known/durationpb",
-    ],
 )
