@@ -22,7 +22,6 @@ require (
 	github.com/bazelbuild/remote-apis v0.0.0-20241031050812-253013303c9e
 	github.com/fxtlabs/primes v0.0.0-20150821004651-dad82d10a449
 	github.com/go-jose/go-jose/v3 v3.0.3
-	github.com/golang/mock v1.6.0
 	github.com/google/go-jsonnet v0.20.0
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.0
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.2

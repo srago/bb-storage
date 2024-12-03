@@ -47,7 +47,6 @@ use_repo(
     "com_github_bazelbuild_buildtools",
     "com_github_fxtlabs_primes",
     "com_github_go_jose_go_jose_v3",
-    "com_github_golang_mock",
     "com_github_googlecloudplatform_grpc_gcp_go_grpcgcp",
     "com_github_google_uuid",
     "com_github_gorilla_mux",
@@ -115,10 +114,6 @@ go_deps_dev.module_override(
     patches = ["//:patches/org_uber_go_mock/mocks-for-funcs.diff"],
     path = "go.uber.org/mock",
 )
-#go_deps_dev.module_override(
-#    patches = ["//:patches/com_github_googlecloudplatform_grpc_gcp_go_grpcgcp/grpc-gcp-go-build.diff"],
-#    path = "github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp",
-#)
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
