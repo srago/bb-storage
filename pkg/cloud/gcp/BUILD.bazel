@@ -11,5 +11,6 @@ go_library(
     deps = [
         "@com_google_cloud_go_storage//:storage",
         "@org_golang_google_api//option",
+        "//pkg/proto/configuration/cloud/gcp",
     ],
 )

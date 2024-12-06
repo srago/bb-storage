@@ -12,6 +12,8 @@ go_library(
         "//pkg/global",
         "//pkg/grpc",
         "//pkg/program",
+        "//pkg/proto/configuration/bb_replicator",
+        "//pkg/proto/replicator",
         "//pkg/util",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

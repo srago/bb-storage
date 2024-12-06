@@ -87,6 +87,7 @@ go_test(
         ":grpcauth",
         "//internal/mock",
         "//pkg/auth",
+        "//pkg/proto/auth",
         "//pkg/testutil",
         "@com_github_jmespath_go_jmespath//:go-jmespath",
         "@com_github_stretchr_testify//require",
