@@ -10,7 +10,7 @@ package blobstore
 // should also be stale in Spanner, as long as the GCS TTL is at least as long as the Spanner TTL.
 // To make sure action cache entries are retained on an LRU-like basis, we queue up a list of
 // hashes as they are referenced and periodically update ther reference time.  Doing this one at
-// a time incurs too much overhead in spanner, so we perform bulk operations.  The downside of
+// a time incurs too much overhead in Spanner, so we perform bulk operations.  The downside of
 // this approach is that we can lose reference updates if the servers reboot while updates are
 // still queued.  Worst case, these objects will be evicted and need to be rebuilt the next time
 // they are needed.
@@ -23,6 +23,15 @@ package blobstore
 // are entered into the cache.  Similarly, when an object's reference time is updated, it will
 // not receive further updates until it has spent an additional amount of time in the cache equal
 // to half of the configured lifetime.
+//
+// New design requested by Ed to remove the use of the CompletenesssCheckingBlobAccess wrapper
+// around the Spanner action cache:
+//
+// The original one-table approach is replaced by three tables: one for maintaining the CAS, one
+// for holding AC entries, and one holding associations between the two (foreign keys).  The idea
+// is to rely on the foreign keys to keep all of the CAS objects for a particular action alive as
+// long as the action cache entry is alive.  Since GCS object lifetimes are unaffected by Spanner
+// keys, we need to manage lifetimes in GCS ourselves.
 
 import (
 	"context"
@@ -43,24 +52,31 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"google.golang.org/api/iterator"
+	//"google.golang.org/api/iterator"
         "google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 
 	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 	"cloud.google.com/go/storage"
 	//dbpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	dbpb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
+
+	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 )
 
 const (
-	maxSize           int64 = 10*1024*1024 - 1
-	tableName               = "Blobs_v1_0"
+	maxSpannerRecSz   int64 = 10*1024*1024 - 1
+	maxMsgSz            int = 16 * 1024 * 1024
+	maxTreeSz           int = 2 * 1024 * 1024
+	acTableName             = "AC_Blobs_v1_0"
+	casTableName            = "CAS_Blobs_v1_0"
+	assocTableName          = "Assoc_v1_0"
 	maxRefBulkSz            = 600 // Maximum number of hashes to gather before doing a bulk reftime update
 	maxRefHours             = 1   // Maximum time to wait before updating reference times
-	defaultDaysToLive       = 7
+	defaultDaysToLive       = 14
 	nsecsPerDay              = 86400000000000
 
 	// Labels for backend metrics
@@ -81,6 +97,7 @@ const (
 )
 
 var (
+	spannerGCSCAS *spannerGCSBlobAccess
 	spannerGCSBlobAccessPrometheusMetrics sync.Once
 
 	spannerMalformedKeyCount = prometheus.NewCounter(
@@ -203,8 +220,13 @@ type spannerGCSBlobAccess struct {
 
 type spannerRecord struct {
 	Key           string
-	InlineData    []byte
 	ReferenceTime time.Time
+	InlineData    []byte
+}
+
+type assocRecord struct {
+	ActionKey     string
+	DigestKey     string
 }
 
 // Keep track of keys and the storage locations where they reside.
@@ -214,26 +236,25 @@ type keyLoc struct {
 }
 
 // databaseName is of the form "projects/<project ID>/instances/<instance name>/databases/<database name>".
-// tableName should include the name of the table and the version of the table's schema.
-func createSpannerTable(ctx context.Context, databaseName string, daysToLive uint64) error {
-	ac, err := database.NewDatabaseAdminClient(ctx)
+func createSpannerTables(ctx context.Context, databaseName string, daysToLive uint64) error {
+	cl, err := database.NewDatabaseAdminClient(ctx)
 	if err != nil {
 		log.Printf("Can't create spanner database admin client: %v", err)
 		return err
 	}
-	defer ac.Close()
+	defer cl.Close()
 
 	// If daysToLive is zero, use the default.
 	if daysToLive == 0 {
 		daysToLive = defaultDaysToLive
 	}
 
-	s := `CREATE TABLE ` + tableName + ` (
+	s := `CREATE TABLE IF NOT EXISTS ` + acTableName + ` (
 		Key STRING(MAX),
-		InlineData BYTES(MAX),
 		ReferenceTime TIMESTAMP NOT NULL,
+                InlineData BYTES(MAX),
 	) PRIMARY KEY(Key), ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(daysToLive, 10) + ` DAY))`
-	op, err := ac.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
 			s,
@@ -245,46 +266,101 @@ func createSpannerTable(ctx context.Context, databaseName string, daysToLive uin
 	if err = op.Wait(ctx); err != nil {
 		return err
 	}
+
+	s = `CREATE TABLE IF NOT EXISTS ` + casTableName + ` (
+		Key STRING(MAX),
+		ReferenceTime TIMESTAMP NOT NULL,
+                InlineData BYTES(MAX),
+	) PRIMARY KEY(Key), ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(daysToLive, 10) + ` DAY))`
+	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+		Database: databaseName,
+		Statements: []string{
+			s,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err = op.Wait(ctx); err != nil {
+		return err
+	}
+
+	// Create the action cache table so that when an action cache entry is evicted by the delete policy, all of the matching records
+	// in the Assoc table are removed.  However, we want to prevent the CAS blobs from being removed until no more action cache entries
+	// refer to them, so we don't cascade deletes from the CAS table.  Attempts to delete a CAS entry will fail if any action cache
+	// entries refer to it.
+	s = `CREATE TABLE IF NOT EXISTS ` + assocTableName + ` (
+		Key STRING(36) DEFAULT (GENERATE_UUID()),
+		ActionKey STRING(MAX) NOT NULL,
+		DigestKey STRING(MAX) NOT NULL,
+		CONSTRAINT FKActionKey FOREIGN KEY(ActionKey) REFERENCES ` + acTableName + `(Key) ON DELETE CASCADE,
+		CONSTRAINT FKDigestKey FOREIGN KEY(DigestKey) REFERENCES ` + casTableName + `(Key)
+	) PRIMARY KEY(Key)`
+	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+		Database: databaseName,
+		Statements: []string{
+			s,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err = op.Wait(ctx); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func getSpannerTTL(ctx context.Context, databaseName string) (uint64, error) {
-	ac, err := database.NewDatabaseAdminClient(ctx)
+func getSpannerTTL(ctx context.Context, spannerClient *spanner.Client, databaseName string) (uint64, error) {
+	stmt := spanner.NewStatement(`SELECT ROW_DELETION_POLICY_EXPRESSION FROM information_schema.tables WHERE table_name = "` + acTableName + `"`)
+	iter := spannerClient.Single().Query(ctx, stmt)
+	row, err := iter.Next()
+	iter.Stop()
 	if err != nil {
-		log.Printf("Can't create spanner database admin client: %v", err)
+		log.Printf("Can't get row deletion policy from Spanner, err = %v", err)
 		return 0, err
 	}
-	defer ac.Close()
-	resp, err := ac.GetDatabaseDdl(ctx, &dbpb.GetDatabaseDdlRequest{
-		Database: databaseName,
-	})
+	var policy string
+	err = row.Column(0, &policy)
 	if err != nil {
-		log.Printf("Can't read spanner database DDL: %v", err)
+		log.Printf("Can't get row deletion policy from Spanner, err = %v", err)
 		return 0, err
 	}
-	for _, s := range resp.Statements {
-		if strings.Contains(s, "ROW DELETION POLICY") {
-			if i := strings.Index(s, "INTERVAL"); i != -1 {
-				var days uint64
-				n, err := fmt.Sscanf(s[i:], "INTERVAL %d DAY", &days)
-				if err == nil && n != 0 {
-					return days, nil
-				}
-			}
+	log.Printf("Policy is %s", policy)
+	if i := strings.Index(policy, "INTERVAL"); i != -1 {
+		var days uint64
+		n, err := fmt.Sscanf(policy[i:], "INTERVAL %d DAY", &days)
+		if err == nil && n != 0 {
+			return days, nil
 		}
 	}
 	return 0, nil
 }
 
 func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, days uint64) error {
-	ac, err := database.NewDatabaseAdminClient(ctx)
+	cl, err := database.NewDatabaseAdminClient(ctx)
 	if err != nil {
 		log.Printf("Can't create spanner database admin client: %v", err)
 		return err
 	}
-	defer ac.Close()
-	s := `ALTER TABLE ` + tableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
-	op, err := ac.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+	defer cl.Close()
+	s := `ALTER TABLE ` + acTableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
+	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+		Database: databaseName,
+		Statements: []string{
+			s,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err = op.Wait(ctx); err != nil {
+		return err
+	}
+
+	s = `ALTER TABLE ` + casTableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
+	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
 			s,
@@ -383,7 +459,7 @@ func (ba *spannerGCSBlobAccess) findLocFromDigest(digest digest.Digest) int {
 		panic("Can't call fileLocFromDigest for Action Cache")
 	}
 	sz := digest.GetSizeBytes()
-	if sz > maxSize {
+	if sz > maxSpannerRecSz {
 		loc |= LOC_GCS
 	} else {
 		loc |= LOC_SPANNER
@@ -401,7 +477,7 @@ func (ba *spannerGCSBlobAccess) findLocFromKey(key string) (int, error) {
 		return 0, err
 	}
 	var loc int
-	if sz > maxSize {
+	if sz > maxSpannerRecSz {
 		loc |= LOC_GCS
 	} else {
 		loc |= LOC_SPANNER
@@ -454,29 +530,14 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		return nil, err
 	}
 
-	// If the spanner table doesn't exist, create it.
-	stmt := spanner.NewStatement(`SELECT 1 FROM information_schema.tables WHERE table_name = "` + tableName + `"`)
-	iter := spannerClient.Single().Query(ctx, stmt)
-	_, err = iter.Next()
-	iter.Stop()
-	log.Printf("spanner table check, err = %v", err)
-	if err == iterator.Done {
-		// Table doesn't exist.  Create it.
-		if err = createSpannerTable(ctx, databaseName, daysToLive); err != nil {
-			// We could have raced with another pod.  Check if the table exists.
-			iter := spannerClient.Single().Query(ctx, stmt)
-			_, xerr := iter.Next()
-			iter.Stop()
-			if xerr == iterator.Done {
-				// Table still doesn't exist.
-				spannerClient.Close()
-				log.Printf("Can't create spanner table: %v", err)
-				return nil, err
-			}
-		}
+	// If the spanner tables don't exist, create them.
+	if err = createSpannerTables(ctx, databaseName, daysToLive); err != nil {
+		spannerClient.Close()
+		log.Printf("Can't create spanner table: %v", err)
+		return nil, err
 	} else if err == nil {
 		// Check if we need to update the TTL.
-		days, err := getSpannerTTL(ctx, databaseName)
+		days, err := getSpannerTTL(ctx, spannerClient, databaseName)
 		if err != nil {
 			log.Printf("Can't determine Spanner TTL: %v", err)
 		}
@@ -537,7 +598,8 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	log.Printf("NewSpannerGCSBlobAccess type %s", storageType)
 
 	// FindMissing takes care of updaing the reference time on CAS objects, but we'd like to update
-	// AC objects when they're read, to simulate an LRU cache.  Doing this one at a time is inefficient.
+	// AC objects when they're read, to simulate an LRU cache.  Doing this one at a time is inefficient,
+	// and the poor performance was noticed by users.
 	var refCh chan keyLoc
 	if storageType == "AC" {
 		refCh = make(chan keyLoc, maxRefBulkSz)
@@ -558,10 +620,13 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	if refCh != nil {
 		go ba.bulkUpdate(refCh)
 	}
+	if storageType == "CAS" {
+		spannerGCSCAS = ba
+	}
 	return ba, nil
 }
 
-func (ba *spannerGCSBlobAccess) delete(ctx context.Context, key string, loc int) error {
+func (ba *spannerGCSBlobAccess) delete(ctx context.Context, tableName string, key string, loc int) error {
 	deleteMut := spanner.Delete(tableName, spanner.Key{key})
 	start := time.Now()
 	_, err := ba.spannerClient.Apply(ctx, []*spanner.Mutation{deleteMut})
@@ -590,9 +655,16 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	key := ba.digestToKey(digest)
 	//log.Printf("SpannerGCSBlobAccess GET key is %s", key)
 
+	var tableName string
+	if ba.storageType == "AC" {
+		tableName = acTableName
+	} else {
+		tableName = casTableName
+	}
+
 	// Grab the row itself
 	now := time.Now().UTC()
-	row, err := ba.spannerClient.Single().ReadRow(ctx, tableName, spanner.Key{key}, []string{"InlineData", "ReferenceTime"})
+	row, err := ba.spannerClient.Single().ReadRow(ctx, tableName, spanner.Key{key}, []string{"ReferenceTime", "InlineData"})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_GET).Observe(time.Now().Sub(now).Seconds())
 	if err != nil {
 		log.Printf("GET error: ReadRow key %s failed: %v", key, err)
@@ -600,8 +672,8 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	}
 
 	var s struct {
-		InlineData    []byte
 		ReferenceTime time.Time
+		InlineData    []byte
 	}
 	err = row.ToStruct(&s)
 	if err != nil {
@@ -631,7 +703,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 			} else {
 				beType = BE_SPANNER
 			}
-			if err := ba.delete(ctx, key, loc); err == nil {
+			if err := ba.delete(ctx, tableName, key, loc); err == nil {
 				spannerMalformedBlobDeletedCount.WithLabelValues(beType).Inc()
 				log.Printf("Blob %s was malformed and has been deleted from Spanner/GCS successfully", digest.String())
 			} else {
@@ -649,7 +721,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 		r, err := obj.NewReader(ctx)
 		if err != nil {
 			// If we couldn't read the bucket, then let's delete it from spanner (and from gcs if we can!)
-			if err2 := ba.delete(ctx, key, loc); err2 == nil {
+			if err2 := ba.delete(ctx, tableName, key, loc); err2 == nil {
 				gcsFailedReadDeletedBlobCount.Inc()
 				log.Printf("Blob %s was inaccessible in GCS (due to %v) and has been deleted from Spanner/GCS successfully", digest.String(), err)
 			} else {
@@ -700,9 +772,27 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	key := ba.digestToKey(digest)
 	//log.Printf("SpannerGCSBlobAccess PUT key is %s, size %d", key, size)
 
+	var digestKeys []string
+	if ba.storageType == "AC" {
+// TODO(ragost): calculate list of hashes in merkle tree
+		b1, b2 := b.CloneCopy(maxMsgSz)
+		actionResult, err := b1.ToProto(&remoteexecution.ActionResult{}, maxMsgSz)
+		if err != nil {
+			b2.Discard()
+			return err
+		}
+
+		digestKeys, err = ba.getDigestKeysFromActionResult(ctx, digest.GetDigestFunction(), actionResult.(*remoteexecution.ActionResult))
+		if err != nil {
+			b2.Discard()
+			return err
+		}
+		b = b2
+	}
+
 	var inlineData []byte = nil
 	now := time.Now().UTC()
-	if size > maxSize {
+	if size > maxSpannerRecSz {
 		obj := ba.gcsBucket.Object(key)
 		w := obj.NewWriter(ctx)
 		start := time.Now()
@@ -728,7 +818,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		inlineData = nil
 		ba.touchGCSObject(ctx, key, now)
 	} else {
-		inlineData, err = b.ToByteSlice(int(maxSize))
+		inlineData, err = b.ToByteSlice(int(maxSpannerRecSz))
 		if err != nil {
 			log.Printf("Blob %s can't be copied to Spanner: %v", digest, err)
 			return err
@@ -741,9 +831,17 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	// Now insert into the spanners no matter what!
 	rec := spannerRecord{
 		Key:           key,
-		InlineData:    inlineData,
 		ReferenceTime: now,
+		InlineData:    inlineData,
 	}
+
+	var tableName string
+	if ba.storageType == "AC" {
+		tableName = acTableName
+	} else {
+		tableName = casTableName
+	}
+
 	insertMut, err := spanner.ReplaceStruct(tableName, rec)
 	if err != nil {
 		log.Printf("Can't create mutation for Blob %s: %v", digest, err)
@@ -756,6 +854,16 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	if err != nil {
 		log.Printf("Can'apply create mutation for Blob %s: %v", digest, err)
 		return err
+	}
+
+	if ba.storageType == "AC" {
+		// If this is an overwrite, remove any entries for this AC entry from the Assoc table
+// TODO(ragost): try to avoid this if this is an overwrite
+		ba.deleteAssociationsFromSpanner(ctx, key)
+		// Add new entries to the Assoc table
+		if digestKeys != nil {
+			ba.addAssociationsToSpanner(ctx, key, digestKeys)
+		}
 	}
 	return nil
 }
@@ -784,7 +892,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 
 	// We want to grab anything not in the Blobs table.  First find what's there so we can exclude them from the list
 	// of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
-	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + tableName + ` where Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
+	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + casTableName + ` where Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
 	stmt.Params["keys"] = ksl
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
@@ -843,7 +951,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		}
 	}
 	if len(keys) != 0 {
-		ba.touchSpannerObjects(context.Background(), keys, now)
+		ba.touchSpannerObjects(context.Background(), casTableName, keys, now)
 	}
 
 	return missing.Build(), nil
@@ -875,7 +983,7 @@ func (ba *spannerGCSBlobAccess) touchGCSObject(ctx context.Context, key string, 
 }
 
 // Update the ReferenceTime field the Spanner blob.
-func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, keys []string, t time.Time) error {
+func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, tableName string, keys []string, t time.Time) error {
 	spannerReftimeUpdateCount.Inc()
 	start := time.Now()
 	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
@@ -895,6 +1003,48 @@ func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, keys []
 		return nil
 	})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+	return err
+}
+
+func (ba *spannerGCSBlobAccess) deleteAssociationsFromSpanner(ctx context.Context, key string) error {
+	// TODO(ragost): add metrics spannerReftimeUpdateCount.Inc()
+	// start := time.Now()
+	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		stmt := spanner.NewStatement(`DELETE FROM ` + assocTableName + ` WHERE ActionKey = @key`)
+		stmt.Params["key"] = key
+		_, err := txn.Update(ctx, stmt)
+		if err != nil {
+			// spannerReftimeUpdateFailedCount.Inc()
+			log.Printf("Can't remove associations for AC key %s: %v", key, err)
+			return err
+		}
+		return nil
+	})
+	// backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+	return err
+}
+
+func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, key string, digestKeys []string) error {
+	// TODO(ragost): spannerReftimeUpdateCount.Inc()
+	var assocRecs []assocRecord
+	assocRecs = make([]assocRecord, len(digestKeys))
+	for idx, _ := range digestKeys {
+		assocRecs[idx].ActionKey = key
+		assocRecs[idx].DigestKey = digestKeys[idx]
+	}
+	// start := time.Now()
+	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		stmt := spanner.NewStatement(`INSERT INTO ` + assocTableName + ` SELECT * FROM UNNEST(@assocRecs)`)
+		stmt.Params["assocRecs"] = assocRecs
+		_, err := txn.Update(ctx, stmt)
+		if err != nil {
+			spannerReftimeUpdateFailedCount.Inc()
+			log.Printf("Can't add associations for action %s: %v", key, err)
+			return err
+		}
+		return nil
+	})
+	// backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 	return err
 }
 
@@ -922,7 +1072,7 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 			log.Printf("Processing %d delayed reftime updates", len(keys))
 			timedout = true // just so we know to reset the timer if we're here because we've reached maxRefBulkSz
 			now := time.Now().UTC()
-			go ba.touchSpannerObjects(context.Background(), keys, now)
+			go ba.touchSpannerObjects(context.Background(), acTableName, keys, now)
 
 			// It's unlikely an AC entry would be so large, but I guess we should handle this just in case
 			// it occurs.  I mean, looking at the ActionResult proto definition, it's possble for it to be
@@ -966,4 +1116,128 @@ func (eh *spannerGCSErrorHandler) OnError(err error) (buffer.Buffer, error) {
 
 func (eh *spannerGCSErrorHandler) Done() {
 	backendOperationsDurationSeconds.WithLabelValues(eh.sType, eh.beType, eh.op).Observe(time.Now().Sub(eh.start).Seconds())
+}
+
+type digestKeys struct {
+	keys       []string
+	digestFunc digest.Function
+}
+
+// Most of this following logic is borrowed from CompletenessCheckingBlobAccess.
+func (ba *spannerGCSBlobAccess) getDigestKeysFromActionResult(ctx context.Context, digestFunc digest.Function, actionResult *remoteexecution.ActionResult) ([]string, error) {
+	dk := &digestKeys{}
+	dk.keys = make([]string, 128)
+	dk.digestFunc = digestFunc
+
+	// Iterate over all remoteexecution.Digest fields contained
+	// within the ActionResult. Check the existence of output
+	// directories, even though they are loaded through GetTree()
+	// later on. GetTree() may not necessarily cause those objects
+	// to be touched.
+	for _, outputFile := range actionResult.OutputFiles {
+		if err := dk.add(outputFile.Digest); err != nil {
+			return nil, err
+		}
+	}
+	for _, outputDirectory := range actionResult.OutputDirectories {
+		if err := dk.add(outputDirectory.TreeDigest); err != nil {
+			return nil, err
+		}
+		if err := dk.add(outputDirectory.RootDirectoryDigest); err != nil {
+			return nil, err
+		}
+	}
+	if err := dk.add(actionResult.StdoutDigest); err != nil {
+		return nil, err
+	}
+	if err := dk.add(actionResult.StderrDigest); err != nil {
+		return nil, err
+	}
+
+	// Iterate over all remoteexecution.Digest fields contained
+	// within output directories (remoteexecution.Tree objects)
+	// referenced by the ActionResult.
+	remainingTreeSizeBytes := int64(maxTreeSz)
+	for _, outputDirectory := range actionResult.OutputDirectories {
+		treeDigest, err := dk.deriveDigest(outputDirectory.TreeDigest)
+		if err != nil {
+			return nil, err
+		}
+		sizeBytes := treeDigest.GetSizeBytes()
+		if sizeBytes > remainingTreeSizeBytes {
+			return nil, status.Errorf(codes.NotFound, "Combined size of all output directories exceeds maximum limit of %d bytes", maxTreeSz)
+		}
+		remainingTreeSizeBytes -= sizeBytes
+
+		r := spannerGCSCAS.Get(ctx, treeDigest).ToReader()
+		if err := util.VisitProtoBytesFields(r, func(fieldNumber protowire.Number, offsetBytes, sizeBytes int64, fieldReader io.Reader) error {
+			if fieldNumber == TreeRootFieldNumber || fieldNumber == TreeChildrenFieldNumber {
+				directoryMessage, err := buffer.NewProtoBufferFromReader(
+					&remoteexecution.Directory{},
+					io.NopCloser(fieldReader),
+					buffer.UserProvided,
+				).ToProto(&remoteexecution.Directory{}, maxMsgSz)
+				if err != nil {
+					return err
+				}
+				directory := directoryMessage.(*remoteexecution.Directory)
+
+				// Files are always stored as separate CAS
+				// objects. Directories should only be stored
+				// as separate CAS objects if we announce them
+				// to be present by having the root directory
+				// digest set.
+				for _, child := range directory.Files {
+					if err := dk.add(child.Digest); err != nil {
+						return err
+					}
+				}
+				if outputDirectory.RootDirectoryDigest != nil {
+					for _, child := range directory.Directories {
+						if err := dk.add(child.Digest); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			// Any errors generated above may be caused by
+			// data corruption on the Tree object. Force
+			// reading the Tree until completion, and prefer
+			// read errors over any errors generated above.
+			if _, copyErr := io.Copy(io.Discard, r); copyErr != nil {
+				err = copyErr
+			}
+			r.Close()
+			return nil, util.StatusWrapf(err, "Output directory %#v", outputDirectory.Path)
+		}
+		r.Close()
+	}
+	return dk.keys, nil
+}
+
+// deriveDigest converts a digest embedded into an action result from
+// the wire format to an in-memory representation. If that fails, we
+// assume that some data corruption has occurred. In that case, we
+// should destroy the action result.
+func (dk *digestKeys) deriveDigest(blobDigest *remoteexecution.Digest) (digest.Digest, error) {
+	derivedDigest, err := dk.digestFunc.NewDigestFromProto(blobDigest)
+	if err != nil {
+		return digest.BadDigest, util.StatusWrapWithCode(err, codes.NotFound, "Action result contained malformed digest")
+	}
+	return derivedDigest, err
+}
+
+// Add a digest to the list of digests that are pending to be checked
+// for existence in the Content Addressable Storage.
+func (dk *digestKeys) add(blobDigest *remoteexecution.Digest) error {
+	if blobDigest != nil {
+		derivedDigest, err := dk.deriveDigest(blobDigest)
+		if err != nil {
+			return err
+		}
+		dk.keys = append(dk.keys, spannerGCSCAS.digestToKey(derivedDigest))
+	}
+	return nil
 }
