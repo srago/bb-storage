@@ -271,7 +271,7 @@ func createSpannerTables(ctx context.Context, databaseName string, daysToLive ui
 		Key STRING(MAX),
 		ReferenceTime TIMESTAMP NOT NULL,
                 InlineData BYTES(MAX),
-	) PRIMARY KEY(Key), ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(daysToLive, 10) + ` DAY))`
+	) PRIMARY KEY(Key)`
 	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
@@ -347,20 +347,6 @@ func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, days 
 	defer cl.Close()
 	s := `ALTER TABLE ` + acTableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
 	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err = op.Wait(ctx); err != nil {
-		return err
-	}
-
-	s = `ALTER TABLE ` + casTableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
-	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
 			s,
