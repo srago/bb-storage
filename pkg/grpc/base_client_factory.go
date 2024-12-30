@@ -96,6 +96,18 @@ func (cf baseClientFactory) NewClientFromConfiguration(config *configuration.Cli
 	// Optional: TLS.
 	var err error
 	var tlsConfig *tls.Config
+	tlsCfg := config.GetTls()
+	if tlsCfg != nil {
+		spiffeCfg := tlsCfg.GetSpiffe()
+		log.Printf("config.Tls is set")
+		if spiffeCfg != nil {
+			log.Printf("config.Tls.Spiffe is set")
+		} else {
+			log.Printf("config.Tls.Spiffe is nil")
+		}
+	} else {
+		log.Printf("config.Tls is nil")
+	}
 	if config.Tls != nil && config.Tls.Spiffe != nil {
 		tlsConfig, err = bb_tls.NewMTLSConfigFromClientConfiguration(config.Tls)
 	} else {
