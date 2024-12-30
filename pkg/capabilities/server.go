@@ -2,6 +2,7 @@ package capabilities
 
 import (
 	"context"
+	"log"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/bazelbuild/remote-apis/build/bazel/semver"
@@ -24,6 +25,7 @@ func NewServer(provider Provider) remoteexecution.CapabilitiesServer {
 
 func (s *server) GetCapabilities(ctx context.Context, in *remoteexecution.GetCapabilitiesRequest) (*remoteexecution.ServerCapabilities, error) {
 	instanceName, err := digest.NewInstanceName(in.InstanceName)
+	log.Printf("GetCapabilities called")
 	if err != nil {
 		return nil, util.StatusWrapf(err, "Invalid instance name %#v", in.InstanceName)
 	}
