@@ -55,6 +55,7 @@ func newSPIFFECertInfo(certFile, keyFile, caCertFile string) (*spiffeCertInfo, e
 // NewMTLSConfigFromClientConfiguration creates an mTLS configuration object based on parameters specified in a
 // Protobuf message for use with an mTLS client. This Protobuf message is embedded in Buildbarn configuration files.
 func NewMTLSConfigFromClientConfiguration(configuration *configuration.ClientConfiguration) (*tls.Config, error) {
+	log.Printf("NewMTLSConfigFromClientConfiguration")
 	if configuration == nil {
 		return nil, fmt.Errorf("MTLS configuration is missing")
 	}
@@ -103,6 +104,7 @@ func NewMTLSConfigFromClientConfiguration(configuration *configuration.ClientCon
 // NewMTLSConfigFromServerConfiguration creates an mTLS configuration object based on parameters specified in a
 // Protobuf message for use with an mTLS server. This Protobuf message is embedded in Buildbarn configuration files.
 func NewMTLSConfigFromServerConfiguration(configuration *configuration.ServerConfiguration, authConfig *grpc_cfg.AuthenticationPolicy) (*tls.Config, error) {
+	log.Printf("NewMTLSConfigFromServerConfiguration")
 	if configuration == nil {
 		return nil, fmt.Errorf("MTLS configuration is missing")
 	}
