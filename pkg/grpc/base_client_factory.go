@@ -40,7 +40,7 @@ func NewBaseClientFactory(dialer ClientDialer, unaryInterceptors []grpc.UnaryCli
 	}
 }
 
-func newClientDialOptionsFromTLSConfig(tlsConfig *tls.Config) ([]grpc.DialOption, error) {
+func newClientDialOptionsFromTLSConfig(tlsConfig *tls.Config, isSpiffe bool) ([]grpc.DialOption, error) {
 	if tlsConfig == nil {
 		return []grpc.DialOption{grpc.WithInsecure()}, nil
 	}
@@ -65,11 +65,16 @@ func newClientDialOptionsFromTLSConfig(tlsConfig *tls.Config) ([]grpc.DialOption
 		opts.MaxTLSVersion = math.MaxUint16
 	}
 
-	tc, err := advancedtls.NewClientCreds(&opts)
-	if err != nil {
-		return nil, util.StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure GRPC client TLS")
+	var dialOptions []grpc.DialOption
+	if isSpiffe {
+		dialOptions = append(dialOptions, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	} else {
+		tc, err := advancedtls.NewClientCreds(&opts)
+		if err != nil {
+			return nil, util.StatusWrapWithCode(err, codes.InvalidArgument, "Failed to configure GRPC client TLS")
+		}
+		dialOptions = append(dialOptions, grpc.WithTransportCredentials(tc))
 	}
-	dialOptions := []grpc.DialOption{grpc.WithTransportCredentials(tc)}
 	if tlsConfig.ServerName != "" {
 		dialOptions = append(dialOptions, grpc.WithAuthority(tlsConfig.ServerName))
 	}
@@ -96,31 +101,23 @@ func (cf baseClientFactory) NewClientFromConfiguration(config *configuration.Cli
 	// Optional: TLS.
 	var err error
 	var tlsConfig *tls.Config
-	tlsCfg := config.GetTls()
-	if tlsCfg != nil {
-		spiffeCfg := tlsCfg.GetSpiffe()
-		log.Printf("config.Tls is set")
-		if spiffeCfg != nil {
-			log.Printf("config.Tls.Spiffe is set")
-		} else {
-			log.Printf("config.Tls.Spiffe is nil")
-		}
-	} else {
-		log.Printf("config.Tls is nil")
-	}
+	var isSpiffe bool
 	if config.Tls != nil && config.Tls.Spiffe != nil {
+		isSpiffe = true
 		tlsConfig, err = bb_tls.NewMTLSConfigFromClientConfiguration(config.Tls)
 	} else {
+		isSpiffe = false
 		log.Printf("calling NewTLSConfigFromClientConfiguration instead of MTLS")
 		tlsConfig, err = bb_tls.NewTLSConfigFromClientConfiguration(config.Tls)
 	}
 	if err != nil {
 		return nil, util.StatusWrap(err, "Failed to create TLS configuration")
 	}
-	tlsDialOpts, err := newClientDialOptionsFromTLSConfig(tlsConfig)
+	tlsDialOpts, err := newClientDialOptionsFromTLSConfig(tlsConfig, isSpiffe)
 	if err != nil {
 		return nil, util.StatusWrap(err, "Failed to convert TLS configuration")
 	}
+
 	dialOptions = append(dialOptions, tlsDialOpts...)
 
 	if windowSize := config.InitialWindowSizeBytes; windowSize != 0 {
