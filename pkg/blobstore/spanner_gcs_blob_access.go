@@ -448,7 +448,10 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	})
 
 	ctx := context.Background()
-	spannerClient, err := spanner.NewClient(ctx, databaseName)
+	cfg := spanner.ClientConfig {
+		DisableNativeMetrics: true,
+	}
+	spannerClient, err := spanner.NewClientWithConfig(ctx, databaseName, cfg)
 	if err != nil {
 		log.Printf("Can't create spanner client: %v", err)
 		return nil, err
