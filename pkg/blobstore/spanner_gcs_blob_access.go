@@ -320,8 +320,8 @@ func createSpannerTables(ctx context.Context, databaseName string, daysToLive ui
 	return nil
 }
 
-func getSpannerTTL(ctx context.Context, spannerClient *spanner.Client, databaseName string) (uint64, error) {
-	stmt := spanner.NewStatement(`SELECT ROW_DELETION_POLICY_EXPRESSION FROM information_schema.tables WHERE table_name = "` + acTableName + `"`)
+func getSpannerTTL(ctx context.Context, spannerClient *spanner.Client, databaseName string, tableName string) (uint64, error) {
+	stmt := spanner.NewStatement(`SELECT ROW_DELETION_POLICY_EXPRESSION FROM information_schema.tables WHERE table_name = "` + tableName + `"`)
 	iter := spannerClient.Single().Query(ctx, stmt)
 	row, err := iter.Next()
 	iter.Stop()
@@ -346,14 +346,14 @@ func getSpannerTTL(ctx context.Context, spannerClient *spanner.Client, databaseN
 	return 0, nil
 }
 
-func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, days uint64) error {
+func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, tableName string, days uint64) error {
 	cl, err := database.NewDatabaseAdminClient(ctx)
 	if err != nil {
 		log.Printf("Can't create spanner database admin client: %v", err)
 		return err
 	}
 	defer cl.Close()
-	s := `ALTER TABLE ` + acTableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
+	s := `ALTER TABLE ` + tableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
 	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
@@ -481,14 +481,14 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		spannerClient.Close()
 		log.Printf("Can't create spanner table: %v", err)
 		return nil, err
-	} else if err == nil {
+	} else if storageType == "AC" {
 		// Check if we need to update the TTL.
-		days, err := getSpannerTTL(ctx, spannerClient, databaseName)
+		days, err := getSpannerTTL(ctx, spannerClient, databaseName, acTableName)
 		if err != nil {
 			log.Printf("Can't determine Spanner TTL: %v", err)
 		}
 		if days != daysToLive {
-			err = updateSpannerDeletionPolicy(ctx, databaseName, daysToLive)
+			err = updateSpannerDeletionPolicy(ctx, databaseName, acTableName, daysToLive)
 			if err != nil {
 				log.Printf("Can't update Spanner TTL: %v", err)
 			} else {

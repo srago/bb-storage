@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
@@ -29,14 +30,17 @@ import (
 func main() {
 	program.RunMain(func(ctx context.Context, siblingsGroup, dependenciesGroup program.Group) error {
 		if len(os.Args) != 2 {
+			log.Printf("Usage: bb_storage bb_storage.jsonnet")
 			return status.Error(codes.InvalidArgument, "Usage: bb_storage bb_storage.jsonnet")
 		}
 		var configuration bb_storage.ApplicationConfiguration
 		if err := util.UnmarshalConfigurationFromFile(os.Args[1], &configuration); err != nil {
+			log.Printf("Failed to read configuration from %s: %v", os.Args[1], err)
 			return util.StatusWrapf(err, "Failed to read configuration from %s", os.Args[1])
 		}
 		lifecycleState, grpcClientFactory, err := global.ApplyConfiguration(configuration.Global, configuration.GetMonitoredFileSystems())
 		if err != nil {
+			log.Printf("Failed to apply global configuration options: %v", err)
 			return util.StatusWrap(err, "Failed to apply global configuration options")
 		}
 
@@ -58,6 +62,7 @@ func main() {
 					grpcClientFactory,
 					int(configuration.MaximumMessageSizeBytes)))
 			if err != nil {
+				log.Printf("Failed to create Content Addressable Storage: %v", err)
 				return util.StatusWrap(err, "Failed to create Content Addressable Storage")
 			}
 			cacheCapabilitiesProviders = append(cacheCapabilitiesProviders, info.BlobAccess)
@@ -77,6 +82,7 @@ func main() {
 					grpcClientFactory,
 					int(configuration.MaximumMessageSizeBytes)))
 			if err != nil {
+				log.Printf("Failed to create Action Cache: %v", err)
 				return util.StatusWrap(err, "Failed to create Action Cache")
 			}
 			cacheCapabilitiesProviders = append(
@@ -96,6 +102,7 @@ func main() {
 					grpcClientFactory,
 					int(configuration.MaximumMessageSizeBytes)))
 			if err != nil {
+				log.Printf("Failed to create Indirect Content Addressable Storage: %v", err)
 				return util.StatusWrap(err, "Failed to create Indirect Content Addressable Storage")
 			}
 			indirectContentAddressableStorage = authorizedBackend
@@ -111,6 +118,7 @@ func main() {
 					grpcClientFactory,
 					int(configuration.MaximumMessageSizeBytes)))
 			if err != nil {
+				log.Printf("Failed to create Initial Size Class Cache: %v", err)
 				return util.StatusWrap(err, "Failed to create Initial Size Class Cache")
 			}
 			initialSizeClassCache = authorizedBackend
@@ -126,6 +134,7 @@ func main() {
 					grpcClientFactory,
 					int(configuration.MaximumMessageSizeBytes)))
 			if err != nil {
+				log.Printf("Failed to create File System Access Cache: %v", err)
 				return util.StatusWrap(err, "Failed to create File System Access Cache")
 			}
 			fileSystemAccessCache = authorizedBackend
@@ -146,10 +155,12 @@ func main() {
 		if len(configuration.Schedulers) > 0 {
 			baseBuildQueue, err := builder.NewDemultiplexingBuildQueueFromConfiguration(configuration.Schedulers, grpcClientFactory)
 			if err != nil {
+				log.Printf("Failed to create baseBuildQueue: %v", err)
 				return err
 			}
 			executeAuthorizer, err := auth.DefaultAuthorizerFactory.NewAuthorizerFromConfiguration(configuration.GetExecuteAuthorizer())
 			if err != nil {
+				log.Printf("Failed to create execute authorizer: %v", err)
 				return util.StatusWrap(err, "Failed to create execute authorizer")
 			}
 			buildQueue = builder.NewAuthorizingBuildQueue(baseBuildQueue, executeAuthorizer)
@@ -211,6 +222,7 @@ func main() {
 			},
 			siblingsGroup,
 		); err != nil {
+			log.Printf("gRPC server failure: %v", err)
 			return util.StatusWrap(err, "gRPC server failure")
 		}
 
