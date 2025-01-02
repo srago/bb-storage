@@ -2,18 +2,18 @@ package blobstore
 
 //
 // BuildBarn blob access layer that stores metadata and small (<10MB) blobs in Spanner, while
-// storing large blobs in a GCS bucket.  We rely on Google to delete stale objects, but we avoid
-// the situation where GCS blobs are deleted before the Spanner records referencing them.  We
-// Update reference timestamps at insert time (in Put) and in FindMissing (to ensure blobs live
-// long enough for a bazel build or test to complete).  We also prevent rows scheduled for
-// deletion in GCS from being returned by Get.  Thus, if a blob is stale in GCS, it's metadata
-// should also be stale in Spanner, as long as the GCS TTL is at least as long as the Spanner TTL.
+// storing large blobs in a GCS bucket.  We rely on Google to delete stale action cache entries,
+// but we delete CAS entries ourselves.  Update reference timestamps at insert time (in Put) and
+// in FindMissing (to ensure blobs live long enough for a bazel build or test to complete).  We
+// also prevent rows scheduled for deletion in Spanner from being returned by Get.
+//
 // To make sure action cache entries are retained on an LRU-like basis, we queue up a list of
 // hashes as they are referenced and periodically update ther reference time.  Doing this one at
 // a time incurs too much overhead in Spanner, so we perform bulk operations.  The downside of
 // this approach is that we can lose reference updates if the servers reboot while updates are
 // still queued.  Worst case, these objects will be evicted and need to be rebuilt the next time
-// they are needed.
+// they are needed.  More likely, however, that these objects will be referenced before they are
+// evicted.
 //
 // The LRU-like algorithm is intended to further reduce the frequency of object updates.  It has
 // two arenas: one of objects that will expire in the configured timeframe, and one of objects
@@ -31,7 +31,15 @@ package blobstore
 // for holding AC entries, and one holding associations between the two (foreign keys).  The idea
 // is to rely on the foreign keys to keep all of the CAS objects for a particular action alive as
 // long as the action cache entry is alive.  Since GCS object lifetimes are unaffected by Spanner
-// keys, we need to manage lifetimes in GCS ourselves.
+// keys, we need to manage lifetimes in GCS ourselves.  Furthermore, we can't have a row deletion
+// policy for CAS objects recorded in Spanner, because Spanner doesn't allow that unless we cascade
+// deletes to the Assoc table, which would remove the guarantee that as long as an action cache
+// entry is valid, that all of the CAS objects it refers to are alive in the CAS.  At this point,
+// it appears the proper solution is to add reference counts to CAS objects, but this becomes hard
+// to deal with when you consider trying to clean up on errors.  Transactions might make that problem
+// easier to deal with, but as long as we can detect that an action is not currently in progress that
+// uses a given CAS blob, then we can delete the CAS blobs safely.  We use the ReferenceTime to
+// detect inactive CAS blobs, because each FindMissing call updates their ReferenceTime values.
 
 import (
 	"context"
@@ -362,66 +370,15 @@ func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, days 
 }
 
 func createGCSBucket(ctx context.Context, gcsBucket *storage.BucketHandle, databaseName string, daysToLive uint64) error {
-	// Set up the deletion policy.
-	var attrs *storage.BucketAttrs
-
-	// If daysToLive is zero, use the default.
-	if daysToLive == 0 {
-		daysToLive = defaultDaysToLive
-	}
-
-	lifecycle := storage.Lifecycle{}
-	lifecycle.Rules = append(lifecycle.Rules, storage.LifecycleRule{
-		Action: storage.LifecycleAction{
-			Type: storage.DeleteAction,
-		},
-		Condition: storage.LifecycleCondition{
-			DaysSinceCustomTime: int64(daysToLive),
-		},
-	})
-	attrs = &storage.BucketAttrs{
-		Lifecycle: lifecycle,
-	}
-
 	// Extract the project ID from the spanner database name (no, really).
 	s := strings.Split(databaseName, "/")
 	projectID := s[1]
 
 	// Create the bucket.
-	if err := gcsBucket.Create(ctx, projectID, attrs); err != nil {
+	if err := gcsBucket.Create(ctx, projectID, nil); err != nil {
 		return err
 	}
 	return nil
-}
-
-func getGCSTTL(ctx context.Context, gcsBucket *storage.BucketHandle) (uint64, error) {
-	attrs, err := gcsBucket.Attrs(ctx)
-	if err != nil {
-		return 0, err
-	}
-	for _, r := range attrs.Lifecycle.Rules {
-		if r.Action.Type == storage.DeleteAction && r.Condition.DaysSinceCustomTime != 0 {
-			return uint64(r.Condition.DaysSinceCustomTime), nil
-		}
-	}
-	return 0, nil
-}
-
-func updateGCSDeletionPolicy(ctx context.Context, gcsBucket *storage.BucketHandle, daysToLive uint64) error {
-	lifecycle := storage.Lifecycle{}
-	lifecycle.Rules = append(lifecycle.Rules, storage.LifecycleRule{
-		Action: storage.LifecycleAction{
-			Type: storage.DeleteAction,
-		},
-		Condition: storage.LifecycleCondition{
-			DaysSinceCustomTime: int64(daysToLive),
-		},
-	})
-	attrs := storage.BucketAttrsToUpdate{
-		Lifecycle: &lifecycle,
-	}
-	_, err := gcsBucket.Update(ctx, attrs)
-	return err
 }
 
 // Convert a digest to the key of the entry in the Spanner database and GCS bucket.
@@ -568,20 +525,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		storageClient.Close()
 		log.Printf("Can't access GCS bucket: %v", err)
 		return nil, err
-	} else {
-		// Check if we need to update the TTL.
-		days, err := getGCSTTL(ctx, gcsBucket)
-		if err != nil {
-			log.Printf("Can't determine GCS TTL: %v", err)
-		}
-		if days != daysToLive {
-			err = updateGCSDeletionPolicy(ctx, gcsBucket, daysToLive)
-			if err != nil {
-				log.Printf("Can't update GCS TTL: %v", err)
-			} else {
-				log.Printf("GCS TTL changed from %d to %d days", days, daysToLive)
-			}
-		}
 	}
 
 	log.Printf("NewSpannerGCSBlobAccess type %s", storageType)
@@ -611,6 +554,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
+		go ba.evictStaleBlobs(ctx)
 	}
 	return ba, nil
 }
@@ -763,7 +707,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 
 	var digestKeys []string
 	if ba.storageType == "AC" {
-// TODO(ragost): calculate list of hashes in merkle tree
+		// Calculate list of hashes in merkle tree so we can add them to the Assoc table
 		b1, b2 := b.CloneCopy(maxMsgSz)
 		actionResult, err := b1.ToProto(&remoteexecution.ActionResult{}, maxMsgSz)
 		if err != nil {
@@ -847,7 +791,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 
 	if ba.storageType == "AC" {
 		// If this is an overwrite, remove any entries for this AC entry from the Assoc table
-// TODO(ragost): try to avoid this if this is an overwrite
+		// TODO(ragost): try to avoid this if this is an overwrite
 		ba.deleteAssociationsFromSpanner(ctx, key)
 		// Add new entries to the Assoc table
 		if digestKeys != nil {
@@ -996,7 +940,7 @@ func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, tableNa
 }
 
 func (ba *spannerGCSBlobAccess) deleteAssociationsFromSpanner(ctx context.Context, key string) error {
-	// TODO(ragost): add metrics spannerReftimeUpdateCount.Inc()
+	// TODO(ragost): add metrics similar to spannerReftimeUpdateCount.Inc()
 	// start := time.Now()
 	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`DELETE FROM ` + assocTableName + ` WHERE ActionKey = @key`)
@@ -1014,7 +958,7 @@ func (ba *spannerGCSBlobAccess) deleteAssociationsFromSpanner(ctx context.Contex
 }
 
 func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, key string, digestKeys []string) error {
-	// TODO(ragost): spannerReftimeUpdateCount.Inc()
+	// TODO(ragost): add metrics similar to spannerReftimeUpdateCount.Inc()
 	var assocRecs []assocRecord
 	assocRecs = make([]assocRecord, len(digestKeys))
 	for idx, _ := range digestKeys {
@@ -1089,6 +1033,91 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 			t.Stop()
 			t = time.NewTimer(maxRefHours * time.Hour)
 		}
+	}
+}
+
+func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
+	t := time.NewTimer(1 * time.Hour)
+	for {
+		select {
+		case <-t.C:
+		}
+
+		// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
+		start := time.Now()
+		_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+			stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+				` WHERE InlineData IS NOT NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+			stmt.Params["expdays"] = int64(ba.daysToLive)
+			_, err := txn.Update(ctx, stmt)
+			if err != nil {
+				// spannerReftimeUpdateFailedCount.Inc()
+				log.Printf("Can't expire small Blobs: %v", err)
+				return err
+			}
+			return nil
+		})
+		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+
+		// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
+		stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE InlineData IS NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+		stmt.Params["expdays"] = int64(ba.daysToLive)
+		start = time.Now()
+		iter := ba.spannerClient.Single().Query(ctx, stmt)
+
+		keys := make([]string, 1000)
+		err = iter.Do(func(row *spanner.Row) error {
+			// Errors in this function (interpretting the row results) should only occur if someone changes the
+			// schema without updating this file.
+			var key string
+			err := row.Column(0, &key)
+			if err != nil {
+				log.Printf("ERROR Column 0 wanted Key, got %v", err)
+			}
+			if key == "" {
+				return nil
+			}
+			keys = append(keys, key)
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Can't expire large Blobs: %v", err)
+			backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+		} else {
+			// TODO(ragost): this needs to be in the previous transactions to avoid racing with FindMissing
+			_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+					` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+				stmt.Params["keys"] = keys
+				stmt.Params["expdays"] = int64(ba.daysToLive)
+				_, err := txn.Update(ctx, stmt)
+				if err != nil {
+					// spannerReftimeUpdateFailedCount.Inc()
+					return err
+				}
+				return nil
+			})
+			backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+			if err != nil {
+				log.Printf("Can't expire large Blobs: %v", err)
+			} else {
+				// Finally remove the large blobs from GCS.
+				for _, key := range keys {
+					object := ba.gcsBucket.Object(key)
+					start := time.Now()
+					err = object.Delete(ctx)
+					backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+					if err != nil {
+						log.Printf("Can't expire large Blob %s: %v", key, err)
+					}
+				}
+			}
+		}
+
+		keys = nil
+		t.Stop()
+		t = time.NewTimer(24 * time.Hour)
 	}
 }
 
