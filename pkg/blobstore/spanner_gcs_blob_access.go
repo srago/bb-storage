@@ -447,7 +447,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	expirationTime = time.Duration(daysToLive * nsecsPerDay)
 	// The reference time update threshold is half of the expiration age
 	refUpdateThresh := expirationTime / 2
-	fmt.Printf("daysToLive = %d, expirationTime = %d, refUpdateThresh = %d\n", daysToLive, expirationTime, refUpdateThresh)
+	log.Printf("daysToLive = %d, expirationTime = %d, refUpdateThresh = %d\n", daysToLive, expirationTime, refUpdateThresh)
 
 	spannerGCSBlobAccessPrometheusMetrics.Do(func() {
 		prometheus.MustRegister(spannerMalformedKeyCount)
@@ -967,7 +967,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 	}
 	// start := time.Now()
 	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		stmt := spanner.NewStatement(`INSERT INTO ` + assocTableName + ` SELECT * FROM UNNEST(@assocRecs)`)
+		stmt := spanner.NewStatement(`INSERT INTO ` + assocTableName + ` (ActionKey, DigestKey) SELECT * FROM UNNEST(@assocRecs)`)
 		stmt.Params["assocRecs"] = assocRecs
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
