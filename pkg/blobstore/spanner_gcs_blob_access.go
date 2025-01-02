@@ -775,7 +775,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		tableName = casTableName
 	}
 
-	insertMut, err := spanner.ReplaceStruct(tableName, rec)
+	insertMut, err := spanner.InsertOrUpdateStruct(tableName, rec)
 	if err != nil {
 		log.Printf("Can't create mutation for Blob %s: %v", digest, err)
 		return err
@@ -785,7 +785,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	_, err = ba.spannerClient.Apply(ctx, []*spanner.Mutation{insertMut})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_PUT).Observe(time.Now().Sub(start).Seconds())
 	if err != nil {
-		log.Printf("Can'apply create mutation for Blob %s: %v", digest, err)
+		log.Printf("Can't apply create mutation for Blob %s: %v", digest, err)
 		return err
 	}
 
