@@ -749,7 +749,6 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 			return err
 		}
 		inlineData = nil
-		ba.touchGCSObject(ctx, key, now)
 	} else {
 		inlineData, err = b.ToByteSlice(int(maxSpannerRecSz))
 		if err != nil {
@@ -865,21 +864,13 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		missing.Add(digest)
 	}
 
-	// Now update the CustomTime metadata attribute for the GCS Blobs we have, and the ReferenceTime field for the
-	// Spanner blobs we have.  GCS blobs also have records in spanner to make FindMissing efficient.
+	// Now update the ReferenceTime field for the Spanner blobs we have.  GCS blobs also have records in spanner to make FindMissing
+	// efficient and prevent large CAS blobs from being evicted before and action cache entries that reference them.
 	now := time.Now().UTC()
 	keys := make([]string, 0, digests.Length())
 	for key, refTime := range keyToRefTime {
 		if now.After(refTime.Add(ba.refUpdateThresh)) {
 			log.Printf("FINDMISSING: scheduling touch reftime for key %s reftime %s", key, refTime)
-			loc, err := ba.findLocFromKey(key)
-			if err != nil {
-				spannerMalformedKeyCount.Inc()
-				log.Printf("Couldn't extract location from key %s", key)
-			}
-			if (loc & LOC_GCS) != 0 {
-				ba.touchGCSObject(context.Background(), key, now)
-			}
 			keys = append(keys, key)
 		}
 	}
@@ -893,26 +884,6 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 func (ba *spannerGCSBlobAccess) GetFromComposite(ctx context.Context, parentDigest, childDigest digest.Digest, slicer slicing.BlobSlicer) buffer.Buffer {
 	b, _ := slicer.Slice(ba.Get(ctx, parentDigest), childDigest)
 	return b
-}
-
-// Update the CustomTime metadata attribute for the GCS blob.  We wouldn't want the blob to be deleted while we
-// still refer to it.
-func (ba *spannerGCSBlobAccess) touchGCSObject(ctx context.Context, key string, t time.Time) error {
-	gcsReftimeUpdateCount.Inc()
-	obj := ba.gcsBucket.Object(key)
-	attrs := storage.ObjectAttrsToUpdate{
-		ContentType: "application/octet-stream",
-		CustomTime:  t,
-	}
-	start := time.Now()
-	_, err := obj.Update(ctx, attrs)
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
-	if err != nil {
-		gcsReftimeUpdateFailedCount.Inc()
-		log.Printf("Couldn't update CustomTime for %s: %v", key, err)
-		return err
-	}
-	return nil
 }
 
 // Update the ReferenceTime field the Spanner blob.
@@ -1007,15 +978,6 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 			timedout = true // just so we know to reset the timer if we're here because we've reached maxRefBulkSz
 			now := time.Now().UTC()
 			go ba.touchSpannerObjects(context.Background(), acTableName, keys, now)
-
-			// It's unlikely an AC entry would be so large, but I guess we should handle this just in case
-			// it occurs.  I mean, looking at the ActionResult proto definition, it's possble for it to be
-			// too large to fit in a spanner row.
-			for idx, loc := range locs {
-				if (loc & LOC_GCS) != 0 {
-					go ba.touchGCSObject(context.Background(), keys[idx], now)
-				}
-			}
 			keys = make([]string, 0, maxRefBulkSz)
 			locs = make([]int, 0, maxRefBulkSz)
 			keyMap = make(map[string]bool, maxRefBulkSz)
