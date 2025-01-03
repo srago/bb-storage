@@ -962,6 +962,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 	var assocRecs []assocRecord
 	assocRecs = make([]assocRecord, len(digestKeys))
 	for idx, _ := range digestKeys {
+		log.Printf("action key %s CAS key %s", key, digestKeys[idx])
 		assocRecs[idx].ActionKey = key
 		assocRecs[idx].DigestKey = digestKeys[idx]
 	}
