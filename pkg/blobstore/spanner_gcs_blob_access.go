@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -554,7 +555,12 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
-		go ba.evictStaleBlobs(ctx)
+		id := os.Getenv("HOSTNAME")
+		s := strings.Split(id, "-")
+		// The first worker gets to handle evictions.
+		if len(s) > 1 && s[0] == "worker" && s[len(s)-1] == "0" {
+			go ba.periodicEvicter(ctx)
+		}
 	}
 	return ba, nil
 }
@@ -999,89 +1005,100 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 	}
 }
 
-func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
+func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
+	log.Printf("I am the Evicter")
 	t := time.NewTimer(1 * time.Hour)
 	for {
 		select {
 		case <-t.C:
 		}
 
-		// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
-		start := time.Now()
-		_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-			stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-				` WHERE InlineData IS NOT NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-			stmt.Params["expdays"] = int64(ba.daysToLive)
-			_, err := txn.Update(ctx, stmt)
-			if err != nil {
-				// spannerReftimeUpdateFailedCount.Inc()
-				log.Printf("Can't expire small Blobs: %v", err)
-				return err
-			}
-			return nil
-		})
-		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+		ba.evictStaleBlobs(ctx)
 
-		// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
-		stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE InlineData IS NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-		stmt.Params["expdays"] = int64(ba.daysToLive)
-		start = time.Now()
-		iter := ba.spannerClient.Single().Query(ctx, stmt)
-
-		keys := make([]string, 0, 1000)
-		err = iter.Do(func(row *spanner.Row) error {
-			// Errors in this function (interpretting the row results) should only occur if someone changes the
-			// schema without updating this file.
-			var key string
-			err := row.Column(0, &key)
-			if err != nil {
-				log.Printf("ERROR Column 0 wanted Key, got %v", err)
-			}
-			if key == "" {
-				return nil
-			}
-			keys = append(keys, key)
-			return nil
-		})
-
-		if err != nil {
-			log.Printf("Can't expire large Blobs: %v", err)
-			backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-		} else {
-			// TODO(ragost): this needs to be in the previous transactions to avoid racing with FindMissing
-			_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-					` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-				stmt.Params["keys"] = keys
-				stmt.Params["expdays"] = int64(ba.daysToLive)
-				_, err := txn.Update(ctx, stmt)
-				if err != nil {
-					// spannerReftimeUpdateFailedCount.Inc()
-					return err
-				}
-				return nil
-			})
-			backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-			if err != nil {
-				log.Printf("Can't expire large Blobs: %v", err)
-			} else {
-				// Finally remove the large blobs from GCS.
-				for _, key := range keys {
-					object := ba.gcsBucket.Object(key)
-					start := time.Now()
-					err = object.Delete(ctx)
-					backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-					if err != nil {
-						log.Printf("Can't expire large Blob %s: %v", key, err)
-					}
-				}
-			}
-		}
-
-		keys = nil
 		t.Stop()
 		t = time.NewTimer(24 * time.Hour)
 	}
+}
+
+func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
+	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
+	// Paritition this into reasonable sized chunks.
+
+	log.Printf("Starting Evictions...")
+	count := 0
+	for i := 0; i < 256; i++ {
+		prefix := fmt.Sprintf("'%2.2x%%'", i)
+
+		start := time.Now()
+		stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+			` WHERE InlineData IS NOT NULL AND Key LIKE @prefix TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+		stmt.Params["expdays"] = int64(ba.daysToLive)
+		stmt.Params["prefix"] = prefix
+		nrows, err := ba.spannerClient.PartitionedUpdate(ctx, stmt)
+		if err != nil {
+			// spannerReftimeUpdateFailedCount.Inc()
+			log.Printf("Problems evicting small Blobs: %v", err)
+			break
+		} else {
+			count += int(nrows)
+		}
+		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	}
+	log.Printf("Evicted %d small blobs from the CAS", count)
+
+
+	// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
+	// NB: there are far fewer large Blobs than small ones, so nothing too fancy here.
+	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE InlineData IS NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+	stmt.Params["expdays"] = int64(ba.daysToLive)
+	start := time.Now()
+	iter := ba.spannerClient.Single().Query(ctx, stmt)
+
+	keys := make([]string, 0, 1000)
+	err := iter.Do(func(row *spanner.Row) error {
+		// Errors in this function (interpretting the row results) should only occur if someone changes the
+		// schema without updating this file.
+		var key string
+		err := row.Column(0, &key)
+		if err != nil {
+			log.Printf("ERROR Column 0 wanted Key, got %v", err)
+		}
+		if key == "" {
+			return nil
+		}
+		keys = append(keys, key)
+		return nil
+	})
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+
+	if err != nil {
+		log.Printf("Can't evict large Blobs: %v", err)
+	}
+
+	// TODO(ragost): this needs to be in the previous transactions to avoid racing with FindMissing
+	stmt = spanner.NewStatement(`DELETE FROM ` + casTableName +
+		` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+	stmt.Params["keys"] = keys
+	stmt.Params["expdays"] = int64(ba.daysToLive)
+	_, err = ba.spannerClient.PartitionedUpdate(ctx, stmt)
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	if err != nil {
+		// spannerReftimeUpdateFailedCount.Inc()
+		log.Printf("Problem evicting large Blobs: %v", err)
+		return
+	}
+
+	// Finally remove the large blobs from GCS.
+	for _, key := range keys {
+		object := ba.gcsBucket.Object(key)
+		start := time.Now()
+		err = object.Delete(ctx)
+		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+		if err != nil {
+			log.Printf("Can't expire large Blob %s: %v", key, err)
+		}
+	}
+	log.Printf("Evicted %d large blobs from the CAS", len(keys))
 }
 
 type spannerGCSErrorHandler struct {
