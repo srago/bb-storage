@@ -1066,7 +1066,7 @@ func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 		start = time.Now()
 		iter := ba.spannerClient.Single().Query(ctx, stmt)
 
-		keys := make([]string, 1000)
+		keys := make([]string, 0, 1000)
 		err = iter.Do(func(row *spanner.Row) error {
 			// Errors in this function (interpretting the row results) should only occur if someone changes the
 			// schema without updating this file.
@@ -1145,7 +1145,7 @@ type digestKeys struct {
 // Most of this following logic is borrowed from CompletenessCheckingBlobAccess.
 func (ba *spannerGCSBlobAccess) getDigestKeysFromActionResult(ctx context.Context, digestFunc digest.Function, actionResult *remoteexecution.ActionResult) ([]string, error) {
 	dk := &digestKeys{}
-	dk.keys = make([]string, 128)
+	dk.keys = make([]string, 0, 128)
 	dk.digestFunc = digestFunc
 
 	// Iterate over all remoteexecution.Digest fields contained
