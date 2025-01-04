@@ -1007,7 +1007,8 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 	log.Printf("I am the Evicter")
-	t := time.NewTimer(1 * time.Hour)
+	//t := time.NewTimer(1 * time.Hour)
+	t := time.NewTimer(20 * time.Minute) // only for testing
 	for {
 		select {
 		case <-t.C:
@@ -1028,10 +1029,9 @@ func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 	count := 0
 	for i := 0; i < 256; i++ {
 		prefix := fmt.Sprintf("'%2.2x%%'", i)
-
 		start := time.Now()
 		stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-			` WHERE InlineData IS NOT NULL AND Key LIKE @prefix TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+			` WHERE InlineData IS NOT NULL AND Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 		stmt.Params["expdays"] = int64(ba.daysToLive)
 		stmt.Params["prefix"] = prefix
 		nrows, err := ba.spannerClient.PartitionedUpdate(ctx, stmt)
