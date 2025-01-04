@@ -220,6 +220,7 @@ type spannerGCSBlobAccess struct {
 	gcsBucket     *storage.BucketHandle
 
 	readBufferFactory ReadBufferFactory
+	databaseName      string
 	storageType       string
 	daysToLive        uint64        // to avoid converting back and forth
 	expirationAge     time.Duration // same as above, but easier for time calculations
@@ -544,6 +545,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		gcsBucket:     gcsBucket,
 
 		readBufferFactory: readBufferFactory,
+		databaseName:      databaseName,
 		storageType:       storageType,
 		daysToLive:        daysToLive,
 		expirationAge:     expirationTime,
@@ -1024,26 +1026,47 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
 	// Paritition this into reasonable sized chunks.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	log.Printf("Starting Evictions...")
 	count := 0
-	for i := 0; i < 256; i++ {
-		prefix := fmt.Sprintf("'%2.2x%%'", i)
-		start := time.Now()
-		stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-			` WHERE InlineData IS NOT NULL AND Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-		stmt.Params["expdays"] = int64(ba.daysToLive)
-		stmt.Params["prefix"] = prefix
-		nrows, err := ba.spannerClient.PartitionedUpdate(ctx, stmt)
-		if err != nil {
-			// spannerReftimeUpdateFailedCount.Inc()
-			log.Printf("Problems evicting small Blobs: %v", err)
-			break
-		} else {
-			count += int(nrows)
-		}
-		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(start int) {
+			defer wg.Done()
+			log.Printf("start evicting range %d to %d", start, start+15) // TODO(ragost): just for testing
+			cfg := spanner.ClientConfig {
+				DisableNativeMetrics: true,
+			}
+			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+			if err != nil {
+				log.Printf("Can't create a spanner client: %v", err)
+				return
+			}
+			defer cl.Close()
+			for j := start; j < start + 16; j++ {
+				prefix := fmt.Sprintf("'%2.2x%%'", j)
+				start := time.Now()
+				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+					` WHERE InlineData IS NOT NULL AND Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+				stmt.Params["expdays"] = int64(ba.daysToLive)
+				stmt.Params["prefix"] = prefix
+				nrows, err := cl.PartitionedUpdate(ctx, stmt)
+				if err != nil {
+					// spannerReftimeUpdateFailedCount.Inc()
+					log.Printf("Problems evicting small Blobs: %v", err)
+					break
+				} else {
+					mu.Lock()
+					count += int(nrows)
+					mu.Unlock()
+				}
+				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+			}
+		}(16 * i)
 	}
+	wg.Wait()
 	log.Printf("Evicted %d small blobs from the CAS", count)
 
 
