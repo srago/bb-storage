@@ -40,6 +40,10 @@ package blobstore
 // easier to deal with, but as long as we can detect that an action is not currently in progress that
 // uses a given CAS blob, then we can delete the CAS blobs safely.  We use the ReferenceTime to
 // detect inactive CAS blobs, because each FindMissing call updates their ReferenceTime values.
+//
+// We don't use a row deletion policy even for the action cache table, because we can't control when
+// Spanner actually performs the deletions, which means we can't clean up the CAS as early as we could
+// if we were to handle deletions of the stale action cache entries.  So we do that now, too.
 
 import (
 	"context"
@@ -48,6 +52,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -770,7 +775,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 
 	// We want to grab anything not in the Blobs table.  First find what's there so we can exclude them from the list
 	// of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
-	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + casTableName + ` where Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
+	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
 	stmt.Params["keys"] = ksl
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
@@ -963,7 +968,7 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 }
 
 func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
-	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
+	// We want to find all stale entries in the action cache and then delete them.
 	// Paritition this into reasonable sized chunks.
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -986,7 +991,7 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 			for j := start; j < start + 16; j++ {
 				prefix := fmt.Sprintf("%2.2x%%", j)
 				start := time.Now()
-// TODO(ragost): what if this thing is a large blob?
+// TODO(ragost): what if this thing is a large blob?  Can this happen?
 				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
 					` WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 				stmt.Params["expdays"] = int64(ba.daysToLive)
@@ -1015,7 +1020,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	log.Printf("Starting Evictions...")
 	count := 0
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -1033,8 +1037,8 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 			for j := start; j < start + 16; j++ {
 				prefix := fmt.Sprintf("%2.2x%%", j)
 				start := time.Now()
-/* TODO(ragost): need an easy way to tell if there are any associations to this CAS digest */
-/* BUT... if a CAS blob is stale, then so must also be any AC entries that refer to it */
+				// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
+				// any AC entries that reference it, because we just killed all of the stale AC entries.
 				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
 					` WHERE InlineData IS NOT NULL AND Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 				stmt.Params["expdays"] = int64(ba.daysToLive)
@@ -1085,7 +1089,8 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		log.Printf("Can't evict large Blobs: %v", err)
 	}
 
-	// TODO(ragost): this needs to be in the previous transactions to avoid racing with FindMissing
+	// To avoid racing with clients uploading the same CAS blob that we're trying to evict, we still rely on the reference
+	// time to prevent us from deleting an instance of the reloaded blob. 
 	//spannerReftimeUpdateCount.Inc()
 	start = time.Now()
 	stmt = spanner.NewStatement(`DELETE FROM ` + casTableName +
@@ -1100,6 +1105,30 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		return
 	}
 
+	// Now we need to check if any of the keys we found in the SELECT above still exist in the CAS table so we can avoid
+	// deleting them in GCS.
+	start = time.Now()
+	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys)`)
+	stmt.Params["keys"] = keys
+	iter = ba.spannerClient.Single().Query(ctx, stmt)
+	err = iter.Do(func(row *spanner.Row) error {
+		var key string
+		err := row.Column(0, &key)
+		if err != nil {
+			log.Printf("ERROR Column 0 wanted Key, got %v", err)
+		}
+		if key == "" {
+			return nil
+		}
+		log.Printf("Raced with deleting large CAS blob, key %s; not deleting it from GCS", key)
+		// TODO(ragost): can't delete(keys, key) because keys is a slice
+		keys = slices.DeleteFunc(keys, func(s string) bool {
+			return s == key
+		})
+		return nil
+	})
+
+	errDel := 0
 	// Finally remove the large blobs from GCS.
 	for _, key := range keys {
 		object := ba.gcsBucket.Object(key)
@@ -1107,10 +1136,11 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		err = object.Delete(ctx)
 		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 		if err != nil {
-			log.Printf("Can't expire large Blob %s: %v", key, err)
+			log.Printf("Can't evict large Blob %s: %v", key, err)
+			errDel++
 		}
 	}
-	log.Printf("Evicted %d large blobs from the CAS", len(keys))
+	log.Printf("Evicted %d large blobs from the CAS", len(keys) - errDel)
 }
 
 type spannerGCSErrorHandler struct {
