@@ -263,7 +263,7 @@ func createSpannerTables(ctx context.Context, databaseName string, daysToLive ui
 		Key STRING(MAX),
 		ReferenceTime TIMESTAMP NOT NULL,
                 InlineData BYTES(MAX),
-	) PRIMARY KEY(Key), ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(daysToLive, 10) + ` DAY))`
+	) PRIMARY KEY(Key)`
 	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 		Database: databaseName,
 		Statements: []string{
@@ -319,55 +319,6 @@ func createSpannerTables(ctx context.Context, databaseName string, daysToLive ui
 		return err
 	}
 
-	return nil
-}
-
-func getSpannerTTL(ctx context.Context, spannerClient *spanner.Client, databaseName string, tableName string) (uint64, error) {
-	stmt := spanner.NewStatement(`SELECT ROW_DELETION_POLICY_EXPRESSION FROM information_schema.tables WHERE table_name = "` + tableName + `"`)
-	iter := spannerClient.Single().Query(ctx, stmt)
-	row, err := iter.Next()
-	iter.Stop()
-	if err != nil {
-		log.Printf("Can't get row deletion policy from Spanner, err = %v", err)
-		return 0, err
-	}
-	var policy string
-	err = row.Column(0, &policy)
-	if err != nil {
-		log.Printf("Can't get row deletion policy from Spanner, err = %v", err)
-		return 0, err
-	}
-	log.Printf("Policy is %s", policy)
-	if i := strings.Index(policy, "INTERVAL"); i != -1 {
-		var days uint64
-		n, err := fmt.Sscanf(policy[i:], "INTERVAL %d DAY", &days)
-		if err == nil && n != 0 {
-			return days, nil
-		}
-	}
-	return 0, nil
-}
-
-func updateSpannerDeletionPolicy(ctx context.Context, databaseName string, tableName string, days uint64) error {
-	cl, err := database.NewDatabaseAdminClient(ctx)
-	if err != nil {
-		log.Printf("Can't create spanner database admin client: %v", err)
-		return err
-	}
-	defer cl.Close()
-	s := `ALTER TABLE ` + tableName + ` REPLACE ROW DELETION POLICY (OLDER_THAN(ReferenceTime, INTERVAL ` + strconv.FormatUint(days, 10) + ` DAY))`
-	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err = op.Wait(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -483,20 +434,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		spannerClient.Close()
 		log.Printf("Can't create spanner table: %v", err)
 		return nil, err
-	} else if storageType == "AC" {
-		// Check if we need to update the TTL.
-		days, err := getSpannerTTL(ctx, spannerClient, databaseName, acTableName)
-		if err != nil {
-			log.Printf("Can't determine Spanner TTL: %v", err)
-		}
-		if days != daysToLive {
-			err = updateSpannerDeletionPolicy(ctx, databaseName, acTableName, daysToLive)
-			if err != nil {
-				log.Printf("Can't update Spanner TTL: %v", err)
-			} else {
-				log.Printf("Spanner TTL changed from %d to %d days", days, daysToLive)
-			}
-		}
 	}
 
 	storageClient, err := storage.NewClient(ctx, clientOpts...)
@@ -557,6 +494,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
+	} else {
 		id := os.Getenv("HOSTNAME")
 		s := strings.Split(id, "-")
 		// The first worker gets to handle evictions.
@@ -1016,14 +954,15 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 		case <-t.C:
 		}
 
-		ba.evictStaleBlobs(ctx)
+		ba.evictStaleACBlobs(ctx)
+		spannerGCSCAS.evictStaleCASBlobs(ctx)
 
 		t.Stop()
 		t = time.NewTimer(24 * time.Hour)
 	}
 }
 
-func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
+func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
 	// Paritition this into reasonable sized chunks.
 	var wg sync.WaitGroup
@@ -1035,7 +974,6 @@ func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 		wg.Add(1)
 		go func(start int) {
 			defer wg.Done()
-			log.Printf("start evicting range %d to %d", start, start+15) // TODO(ragost): just for testing
 			cfg := spanner.ClientConfig {
 				DisableNativeMetrics: true,
 			}
@@ -1046,8 +984,57 @@ func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 			}
 			defer cl.Close()
 			for j := start; j < start + 16; j++ {
-				prefix := fmt.Sprintf("'%2.2x%%'", j)
+				prefix := fmt.Sprintf("%2.2x%%", j)
 				start := time.Now()
+// TODO(ragost): what if this thing is a large blob?
+				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
+					` WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+				stmt.Params["expdays"] = int64(ba.daysToLive)
+				stmt.Params["prefix"] = prefix
+				nrows, err := cl.PartitionedUpdate(ctx, stmt)
+				if err != nil {
+					// spannerReftimeUpdateFailedCount.Inc()
+					log.Printf("Problems evicting AC entries: %v", err)
+					break
+				} else {
+					mu.Lock()
+					count += int(nrows)
+					mu.Unlock()
+				}
+				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+			}
+		}(16 * i)
+	}
+	wg.Wait()
+	log.Printf("Evicted %d entries from the AC", count)
+}
+
+func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
+	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
+	// Paritition this into reasonable sized chunks.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	log.Printf("Starting Evictions...")
+	count := 0
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(start int) {
+			defer wg.Done()
+			cfg := spanner.ClientConfig {
+				DisableNativeMetrics: true,
+			}
+			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+			if err != nil {
+				log.Printf("Can't create a spanner client: %v", err)
+				return
+			}
+			defer cl.Close()
+			for j := start; j < start + 16; j++ {
+				prefix := fmt.Sprintf("%2.2x%%", j)
+				start := time.Now()
+/* TODO(ragost): need an easy way to tell if there are any associations to this CAS digest */
+/* BUT... if a CAS blob is stale, then so must also be any AC entries that refer to it */
 				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
 					` WHERE InlineData IS NOT NULL AND Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 				stmt.Params["expdays"] = int64(ba.daysToLive)
@@ -1099,6 +1086,8 @@ func (ba *spannerGCSBlobAccess) evictStaleBlobs(ctx context.Context) {
 	}
 
 	// TODO(ragost): this needs to be in the previous transactions to avoid racing with FindMissing
+	//spannerReftimeUpdateCount.Inc()
+	start = time.Now()
 	stmt = spanner.NewStatement(`DELETE FROM ` + casTableName +
 		` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 	stmt.Params["keys"] = keys
