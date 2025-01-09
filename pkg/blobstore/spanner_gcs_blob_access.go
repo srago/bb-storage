@@ -66,7 +66,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	//"google.golang.org/api/iterator"
         "google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -75,7 +74,6 @@ import (
 	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 	"cloud.google.com/go/storage"
-	//dbpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	dbpb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
@@ -155,6 +153,48 @@ var (
 			Subsystem: "blobstore",
 			Name:      "spanner_expired_blob_read_ignored_total",
 			Help:      "Number of ignored read attempts of expired spanner blobs",
+		})
+	spannerDeleteActionCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "spanner_delete_action_total",
+			Help:      "Number of spanner action deletes that have been attempted",
+		})
+	spannerDeleteActionFailedCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "spanner_delete_action_failed_total",
+			Help:      "Number of spanner action deletes that have failed",
+		})
+	spannerDeleteBlobCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "spanner_delete_blob_total",
+			Help:      "Number of spanner blob deletes that have been attempted",
+		})
+	spannerDeleteBlobFailedCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "spanner_delete_blob_failed_total",
+			Help:      "Number of spanner blob deletes that have failed",
+		})
+	gcsDeleteBlobCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "gcs_delete_blob_total",
+			Help:      "Number of gcs blob deletes that have been attempted",
+		})
+	gcsDeleteBlobFailedCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "buildbarn",
+			Subsystem: "blobstore",
+			Name:      "gcs_delete_blob_failed_total",
+			Help:      "Number of gcs blob deletes that have failed",
 		})
 	gcsFailedReadDeletedBlobCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -416,6 +456,12 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		prometheus.MustRegister(spannerMalformedBlobDeletedCount)
 		prometheus.MustRegister(spannerMalformedBlobDeleteFailedCount)
 		prometheus.MustRegister(spannerExpiredBlobReadIgnoredCount)
+		prometheus.MustRegister(spannerDeleteActionCount)
+		prometheus.MustRegister(spannerDeleteActionFailedCount)
+		prometheus.MustRegister(spannerDeleteBlobCount)
+		prometheus.MustRegister(spannerDeleteBlobFailedCount)
+		prometheus.MustRegister(gcsDeleteBlobCount)
+		prometheus.MustRegister(gcsDeleteBlobFailedCount)
 		prometheus.MustRegister(gcsFailedReadDeletedBlobCount)
 		prometheus.MustRegister(gcsFailedReadDeleteBlobFailedCount)
 		prometheus.MustRegister(gcsPutFailedContextCanceledCount)
@@ -532,12 +578,10 @@ func (ba *spannerGCSBlobAccess) delete(ctx context.Context, tableName string, ke
 }
 
 func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) buffer.Buffer {
-	//log.Printf("SpannerGCSBlobAccess type %#+v GET digest %s", ba.storageType, digest)
 	if err := util.StatusFromContext(ctx); err != nil {
 		return buffer.NewBufferFromError(err)
 	}
 	key := ba.digestToKey(digest)
-	//log.Printf("SpannerGCSBlobAccess GET key is %s", key)
 
 	var tableName string
 	if ba.storageType == "AC" {
@@ -639,7 +683,6 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 }
 
 func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b buffer.Buffer) error {
-	//log.Printf("SpannerGCSBlobAccess type %#+v PUT digest %s", ba.storageType, digest)
 	if err := util.StatusFromContext(ctx); err != nil {
 		b.Discard()
 		return err
@@ -654,7 +697,6 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	}
 
 	key := ba.digestToKey(digest)
-	//log.Printf("SpannerGCSBlobAccess PUT key is %s, size %d", key, size)
 
 	var digestKeys []string
 	if ba.storageType == "AC" {
@@ -741,7 +783,6 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 
 	if ba.storageType == "AC" {
 		// If this is an overwrite, remove any entries for this AC entry from the Assoc table
-		// TODO(ragost): try to avoid this if this is an overwrite
 		ba.deleteAssociationsFromSpanner(ctx, key)
 		// Add new entries to the Assoc table
 		if digestKeys != nil {
@@ -768,7 +809,6 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	ksl := make([]string, digests.Length())                         // Needed for the query
 	for _, digest := range digests.Items() {
 		k := ba.digestToKey(digest)
-		//log.Printf("FINDMISSING digest %s key %s", digest, k)
 		keyToDigest[k] = digest
 		ksl = append(ksl, k)
 	}
@@ -800,7 +840,6 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		if err != nil {
 			log.Printf("ERROR Column 1 wanted ReferenceTime, got %v", err)
 		}
-		//log.Printf("FOUND key %s, digest %s", key, keyToDigest[key])
 		keyToRefTime[key] = refTime
 		delete(keyToDigest, key)
 		return nil
@@ -862,25 +901,22 @@ func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, tableNa
 }
 
 func (ba *spannerGCSBlobAccess) deleteAssociationsFromSpanner(ctx context.Context, key string) error {
-	// TODO(ragost): add metrics similar to spannerReftimeUpdateCount.Inc()
-	// start := time.Now()
+	start := time.Now()
 	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`DELETE FROM ` + assocTableName + ` WHERE ActionKey = @key`)
 		stmt.Params["key"] = key
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
-			// spannerReftimeUpdateFailedCount.Inc()
 			log.Printf("Can't remove associations for AC key %s: %v", key, err)
 			return err
 		}
 		return nil
 	})
-	// backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	return err
 }
 
 func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, key string, digestKeys []string) error {
-	// TODO(ragost): add metrics similar to spannerReftimeUpdateCount.Inc()
 	var assocRecs []assocRecord
 	assocRecs = make([]assocRecord, len(digestKeys))
 	for idx, _ := range digestKeys {
@@ -888,7 +924,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 		assocRecs[idx].ActionKey = key
 		assocRecs[idx].DigestKey = digestKeys[idx]
 	}
-	// start := time.Now()
+	start := time.Now()
 	_, err := ba.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`INSERT INTO ` + assocTableName + ` (ActionKey, DigestKey) SELECT * FROM UNNEST(@assocRecs)`)
 		stmt.Params["assocRecs"] = assocRecs
@@ -900,7 +936,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 		}
 		return nil
 	})
-	// backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	return err
 }
 
@@ -952,8 +988,7 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 	log.Printf("I am the Evicter")
-	//t := time.NewTimer(1 * time.Hour)
-	t := time.NewTimer(20 * time.Minute) // only for testing
+	t := time.NewTimer(1 * time.Hour)
 	for {
 		select {
 		case <-t.C:
@@ -991,14 +1026,14 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 			for j := start; j < start + 16; j++ {
 				prefix := fmt.Sprintf("%2.2x%%", j)
 				start := time.Now()
-// TODO(ragost): what if this thing is a large blob?  Can this happen?
+				// TODO(ragost): what if this thing is a large blob?  Can this happen?
 				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
 					` WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 				stmt.Params["expdays"] = int64(ba.daysToLive)
 				stmt.Params["prefix"] = prefix
 				nrows, err := cl.PartitionedUpdate(ctx, stmt)
 				if err != nil {
-					// spannerReftimeUpdateFailedCount.Inc()
+					// We don't have the number of failed deletes, so can't increment metric
 					log.Printf("Problems evicting AC entries: %v", err)
 					break
 				} else {
@@ -1011,6 +1046,7 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 		}(16 * i)
 	}
 	wg.Wait()
+	spannerDeleteActionCount.Add(float64(count))
 	log.Printf("Evicted %d entries from the AC", count)
 }
 
@@ -1045,7 +1081,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 				stmt.Params["prefix"] = prefix
 				nrows, err := cl.PartitionedUpdate(ctx, stmt)
 				if err != nil {
-					// spannerReftimeUpdateFailedCount.Inc()
+					// We don't have the number of failed deletes, so can't increment metric
 					log.Printf("Problems evicting small Blobs: %v", err)
 					break
 				} else {
@@ -1058,6 +1094,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		}(16 * i)
 	}
 	wg.Wait()
+	spannerDeleteBlobCount.Add(float64(count))
 	log.Printf("Evicted %d small blobs from the CAS", count)
 
 
@@ -1091,7 +1128,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 
 	// To avoid racing with clients uploading the same CAS blob that we're trying to evict, we still rely on the reference
 	// time to prevent us from deleting an instance of the reloaded blob. 
-	//spannerReftimeUpdateCount.Inc()
 	start = time.Now()
 	stmt = spanner.NewStatement(`DELETE FROM ` + casTableName +
 		` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
@@ -1100,7 +1136,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	_, err = ba.spannerClient.PartitionedUpdate(ctx, stmt)
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	if err != nil {
-		// spannerReftimeUpdateFailedCount.Inc()
 		log.Printf("Problem evicting large Blobs: %v", err)
 		return
 	}
@@ -1121,7 +1156,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 			return nil
 		}
 		log.Printf("Raced with deleting large CAS blob, key %s; not deleting it from GCS", key)
-		// TODO(ragost): can't delete(keys, key) because keys is a slice
 		keys = slices.DeleteFunc(keys, func(s string) bool {
 			return s == key
 		})
@@ -1138,6 +1172,9 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		if err != nil {
 			log.Printf("Can't evict large Blob %s: %v", key, err)
 			errDel++
+			gcsDeleteBlobFailedCount.Inc()
+		} else {
+			gcsDeleteBlobCount.Inc()
 		}
 	}
 	log.Printf("Evicted %d large blobs from the CAS", len(keys) - errDel)
