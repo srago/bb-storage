@@ -815,7 +815,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 
 	// We want to grab anything not in the Blobs table.  First find what's there so we can exclude them from the list
 	// of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
-	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
+	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
 	stmt.Params["keys"] = ksl
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
@@ -823,12 +823,9 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_FM).Observe(time.Now().Sub(start).Seconds())
 
 	missing := digest.NewSetBuilder()
-	keyToRefTime := make(map[string]time.Time, digests.Length())
+	keysToTouch := make([]string, 0, digests.Length())
 	err := iter.Do(func(row *spanner.Row) error {
-		// Errors in this function (interpretting the row results) should only occur if someone changes the
-		// schema without updating this file.
 		var key string
-		var refTime time.Time
 		err := row.Column(0, &key)
 		if err != nil {
 			log.Printf("ERROR Column 0 wanted Key, got %v", err)
@@ -836,11 +833,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		if key == "" {
 			return nil
 		}
-		err = row.Column(1, &refTime)
-		if err != nil {
-			log.Printf("ERROR Column 1 wanted ReferenceTime, got %v", err)
-		}
-		keyToRefTime[key] = refTime
+		keysToTouch = append(keysToTouch, key)
 		delete(keyToDigest, key)
 		return nil
 	})
@@ -857,15 +850,8 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	// Now update the ReferenceTime field for the Spanner blobs we have.  GCS blobs also have records in spanner to make FindMissing
 	// efficient and prevent large CAS blobs from being evicted before and action cache entries that reference them.
 	now := time.Now().UTC()
-	keys := make([]string, 0, digests.Length())
-	for key, refTime := range keyToRefTime {
-		if now.After(refTime.Add(ba.refUpdateThresh)) {
-			log.Printf("FINDMISSING: scheduling touch reftime for key %s reftime %s", key, refTime)
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) != 0 {
-		ba.touchSpannerObjects(context.Background(), casTableName, keys, now)
+	if len(keysToTouch) != 0 {
+		ba.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
 	}
 
 	return missing.Build(), nil
