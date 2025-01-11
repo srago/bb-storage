@@ -1008,6 +1008,10 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 }
 
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
+	err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderCheckInterval)
+	if err == nil {
+		log.Printf("Eviction: leader election failed: %v", err)
+	}
 	t1 := time.NewTimer(leaderCheckInterval * time.Second)  // leader election frequency
 	t2 := time.NewTimer(1 * time.Hour)  // time before first check for evictions
 	for {
