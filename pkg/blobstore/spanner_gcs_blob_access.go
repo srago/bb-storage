@@ -1030,7 +1030,8 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 				log.Printf("Eviction: can't determine leader: %v", err)
 			} else if serviceId == "" {
 				log.Printf("Eviction: no leader found")
-			} else {
+			} else if (serviceId == ba.serviceId) {
+				log.Printf("I am the Evicter!")
 				ba.evictStaleACBlobs(ctx)
 				spannerGCSCAS.evictStaleCASBlobs(ctx)
 				t2.Stop()
