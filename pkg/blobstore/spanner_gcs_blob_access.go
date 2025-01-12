@@ -1404,8 +1404,8 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 }
 
 func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSecs int) (string, error) {
-	log.Printf("tryLeaderElection semId %d timeoutSecs %d", semId, timeoutSecs)
-	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemId = @semId AND ActivityTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
+	log.Printf("queryLeader semId %d timeoutSecs %d", semId, timeoutSecs)
+	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId AND ActivityTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
 	stmt.Params["semId"] = semId
 	stmt.Params["timeout"] = timeoutSecs
 	iter := cl.Single().Query(ctx, stmt)
