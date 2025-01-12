@@ -1386,7 +1386,7 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 	_, err := cl.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`UPDATE ` + leaderTableName + ` SET ServiceID = @serviceId, ActivityTimeout = CURRENT_TIMESTAMP()
 			WHERE SemaphoreId = @semId AND
-				((ServiceId != @serviceId AND ActivityTimestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP() INTERVAL @timeout SECOND)) OR
+				((ServiceId != @serviceId AND ActivityTimestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)) OR
 					(ServiceId = @serviceId))`)
 		stmt.Params["semId"] = semId
 		stmt.Params["serviceId"] = serviceId
