@@ -857,6 +857,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
 	backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_FM).Observe(time.Now().Sub(start).Seconds())
 
 	missing := digest.NewSetBuilder()
@@ -1146,6 +1147,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
 
 	keys := make([]string, 0, 1000)
 	err := iter.Do(func(row *spanner.Row) error {
@@ -1380,6 +1382,7 @@ func (dk *digestKeys) add(blobDigest *remoteexecution.Digest) error {
 func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, serviceId string, timeoutSecs int) error {
 	//spannerReftimeUpdateCount.Inc()
 	//start := time.Now()
+	log.Printf("tryLeaderElection semId %d, serviceId %s timeoutSecs %d", semId, serviceId, timeoutSecs)
 	_, err := cl.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`UPDATE ` + leaderTableName + ` SET ServiceID = @serviceId, ActivityTimeout = CURRENT_TIMESTAMP()
 			WHERE SemaphoreId = @semId AND
@@ -1390,7 +1393,8 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 		stmt.Params["timeout"] = timeoutSecs
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
-			spannerReftimeUpdateFailedCount.Inc()
+			log.Printf("election update failed: %v", err)
+			//spannerReftimeUpdateFailedCount.Inc()
 			return err
 		}
 		return nil
@@ -1400,6 +1404,7 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 }
 
 func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSecs int) (string, error) {
+	log.Printf("tryLeaderElection semId %d timeoutSecs %d", semId, timeoutSecs)
 	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemId = @semId AND ActivityTimeout >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
 	stmt.Params["semId"] = semId
 	stmt.Params["timeout"] = timeoutSecs
