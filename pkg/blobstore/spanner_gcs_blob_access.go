@@ -1384,7 +1384,7 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 	//start := time.Now()
 	log.Printf("tryLeaderElection semId %d, serviceId %s timeoutSecs %d", semId, serviceId, timeoutSecs)
 	_, err := cl.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		stmt := spanner.NewStatement(`UPDATE ` + leaderTableName + ` SET ServiceID = @serviceId, ActivityTimeout = CURRENT_TIMESTAMP()
+		stmt := spanner.NewStatement(`UPDATE ` + leaderTableName + ` SET ServiceID = @serviceId, ActivityTimestamp = CURRENT_TIMESTAMP()
 			WHERE SemaphoreId = @semId AND
 				((ServiceId != @serviceId AND ActivityTimestamp < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)) OR
 					(ServiceId = @serviceId))`)
@@ -1405,7 +1405,7 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 
 func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSecs int) (string, error) {
 	log.Printf("tryLeaderElection semId %d timeoutSecs %d", semId, timeoutSecs)
-	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemId = @semId AND ActivityTimeout >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
+	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemId = @semId AND ActivityTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
 	stmt.Params["semId"] = semId
 	stmt.Params["timeout"] = timeoutSecs
 	iter := cl.Single().Query(ctx, stmt)
