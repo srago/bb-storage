@@ -643,7 +643,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	row, err := ba.spannerClient.Single().ReadRow(ctx, tableName, spanner.Key{key}, []string{"ReferenceTime", "InlineData"})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_GET).Observe(time.Now().Sub(now).Seconds())
 	if err != nil {
-		return buffer.NewBufferFromError(util.StatusWrapfWithCode(err, codes.Internal, "GET error: ReadRow key %s failed", key))
+		return buffer.NewBufferFromError(util.StatusWrapfWithCode(err, codes.NotFound, "GET error: ReadRow key %s failed", key))
 	}
 
 	var s struct {
