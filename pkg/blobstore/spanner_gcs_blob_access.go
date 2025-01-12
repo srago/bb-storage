@@ -724,6 +724,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 }
 
 func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b buffer.Buffer) error {
+	log.Printf("SpannerBlobAccess type %#+v PUT digest %s", ba.storageType, digest)
 	if err := util.StatusFromContext(ctx); err != nil {
 		b.Discard()
 		return err
@@ -732,11 +733,13 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	// If we're bigger than 10MB, we have to offload to GCS
 	size, err := b.GetSizeBytes()
 	if err != nil {
+		log.Printf("Put Blob %s: can't get size: %v", digest, err)
 		b.Discard()
 		return util.StatusWrapfWithCode(err, codes.Internal, "Put Blob %v: can't get size", digest)
 	}
 
 	key := ba.digestToKey(digest)
+	log.Printf("SpannerBlobAccess PUT key is %s, size %d", key, size)
 
 	var digestKeys []string
 	if ba.storageType == "AC" {
@@ -744,12 +747,14 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		b1, b2 := b.CloneCopy(maxMsgSz)
 		actionResult, err := b1.ToProto(&remoteexecution.ActionResult{}, maxMsgSz)
 		if err != nil {
+			log.Printf("SpannerBlobAccess: Can't convert ActionResult: %v", err)
 			b2.Discard()
 			return util.StatusWrap(err, "Can't convert ActionResult")
 		}
 
 		digestKeys, err = ba.getDigestKeysFromActionResult(ctx, digest.GetDigestFunction(), actionResult.(*remoteexecution.ActionResult))
 		if err != nil {
+			log.Printf("SpannerBlobAccess: Can't get depdendent blobs from ActionResult: %v", err)
 			b2.Discard()
 			return util.StatusWrap(err, "Can't get dependent blobs from ActionResult")
 		}
@@ -765,10 +770,10 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		var err error
 		if _, err = io.Copy(w, b.ToReader()); err == nil {
 			if err = w.Close(); err != nil {
-				log.Printf("Blob %s can't be copied to GCS, close failed: %v", digest, err)
+				log.Printf("Blob %s can't be copied to GCS, close failed: %v", key, err)
 			}
 		} else {
-			log.Printf("Blob %s can't be copied to GCS, write failed: %v", digest, err)
+			log.Printf("Blob %s can't be copied to GCS, write failed: %v", key, err)
 		}
 		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_PUT).Observe(time.Now().Sub(start).Seconds())
 		if err != nil {
@@ -785,6 +790,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	} else {
 		inlineData, err = b.ToByteSlice(int(maxSpannerRecSz))
 		if err != nil {
+			log.Printf("Blob %s can't be copied to Spanner: %v", key, err)
 			return util.StatusWrapfWithCode(err, codes.Internal, "Blob %s can't be copied to Spanner", key)
 		}
 		if len(inlineData) == 0 {
@@ -808,6 +814,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 
 	insertMut, err := spanner.InsertOrUpdateStruct(tableName, rec)
 	if err != nil {
+		log.Printf("Blob %s can't be copied to Spanner: %v", key, err)
 		return util.StatusWrapfWithCode(err, codes.Internal, "Can't create mutation for Blob %s", key)
 	}
 
@@ -815,6 +822,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	_, err = ba.spannerClient.Apply(ctx, []*spanner.Mutation{insertMut})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_PUT).Observe(time.Now().Sub(start).Seconds())
 	if err != nil {
+		log.Printf("Can'apply create mutation for Blob %s: %v", digest, err)
 		return util.StatusWrapfWithCode(err, codes.Internal, "Can't apply mutation for Blob %s", key)
 	}
 
