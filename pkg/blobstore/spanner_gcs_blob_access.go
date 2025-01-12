@@ -1009,7 +1009,7 @@ func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
 
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 	log.Printf("serviceId is %s", ba.serviceId)
-	err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderCheckInterval)
+	err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
 	if err == nil {
 		log.Printf("Eviction: leader election failed: %v", err)
 	}
@@ -1020,13 +1020,13 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 		case <-t1.C:
 			t1.Stop()
 			t1 = time.NewTimer(leaderCheckInterval * time.Second)
-			err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderCheckInterval)
+			err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
 			if err == nil {
 				log.Printf("Eviction: leader election failed: %v", err)
 			}
 
 		case <-t2.C:
-			serviceId, err := queryLeader(ctx, ba.spannerClient, evicterSemId, leaderCheckInterval)
+			serviceId, err := queryLeader(ctx, ba.spannerClient, evicterSemId, leaderTimeout)
 			if err == nil {
 				log.Printf("Eviction: can't determine leader: %v", err)
 			} else if serviceId == "" {
