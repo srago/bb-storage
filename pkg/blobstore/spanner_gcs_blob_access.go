@@ -2,49 +2,29 @@ package blobstore
 
 //
 // BuildBarn blob access layer that stores metadata and small (<10MB) blobs in Spanner, while
-// storing large blobs in a GCS bucket.  We rely on Google to delete stale action cache entries,
-// but we delete CAS entries ourselves.  Update reference timestamps at insert time (in Put) and
-// in FindMissing (to ensure blobs live long enough for a bazel build or test to complete).  We
-// also prevent rows scheduled for deletion in Spanner from being returned by Get.
-//
-// To make sure action cache entries are retained on an LRU-like basis, we queue up a list of
-// hashes as they are referenced and periodically update ther reference time.  Doing this one at
-// a time incurs too much overhead in Spanner, so we perform bulk operations.  The downside of
-// this approach is that we can lose reference updates if the servers reboot while updates are
-// still queued.  Worst case, these objects will be evicted and need to be rebuilt the next time
-// they are needed.  More likely, however, that these objects will be referenced before they are
-// evicted.
-//
-// The LRU-like algorithm is intended to further reduce the frequency of object updates.  It has
-// two arenas: one of objects that will expire in the configured timeframe, and one of objects
-// that have been extended by having their reference times updated to the latest time they were
-// referenced, but only when they have remained in the cache for half of their configured lifetimes.
-// This removes the need to update young objects that are accessed multiple times when they first
-// are entered into the cache.  Similarly, when an object's reference time is updated, it will
-// not receive further updates until it has spent an additional amount of time in the cache equal
-// to half of the configured lifetime.
+// storing large blobs in a GCS bucket.  We update reference timestamps at insert time (in Put),
+// at read time (in Get) and in FindMissing (to ensure blobs live long enough for a bazel build
+// or test to complete).  We also prevent rows scheduled for deletion in Spanner from being
+// returned by Get.
 //
 // New design requested by Ed to remove the use of the CompletenesssCheckingBlobAccess wrapper
 // around the Spanner action cache:
 //
-// The original one-table approach is replaced by three tables: one for maintaining the CAS, one
-// for holding AC entries, and one holding associations between the two (foreign keys).  The idea
-// is to rely on the foreign keys to keep all of the CAS objects for a particular action alive as
-// long as the action cache entry is alive.  Since GCS object lifetimes are unaffected by Spanner
-// keys, we need to manage lifetimes in GCS ourselves.  Furthermore, we can't have a row deletion
-// policy for CAS objects recorded in Spanner, because Spanner doesn't allow that unless we cascade
-// deletes to the Assoc table, which would remove the guarantee that as long as an action cache
-// entry is valid, that all of the CAS objects it refers to are alive in the CAS.  At this point,
-// it appears the proper solution is to add reference counts to CAS objects, but this becomes hard
-// to deal with when you consider trying to clean up on errors.  Transactions might make that problem
-// easier to deal with, but as long as we can detect that an action is not currently in progress that
-// uses a given CAS blob, then we can delete the CAS blobs safely.  We use the ReferenceTime to
-// detect inactive CAS blobs, because each FindMissing call updates their ReferenceTime values.
+// The original one-table approach is replaced by four tables: one for maintaining the CAS, one
+// for holding AC entries, one holding associations between the two (foreign keys), and one used
+// for implementing leader election (only one server should be handling evictions of stale blobs).
+// The idea is to rely on the foreign keys to keep all of the CAS objects for a particular action
+// alive as long as the action cache entry is alive.  Since GCS object lifetimes are unaffected by
+// Spanner keys, we need to manage lifetimes in GCS ourselves.  Furthermore, we can't have a row
+// deletion policy for CAS objects recorded in Spanner, because Spanner doesn't allow that unless
+// we cascade deletes to the table holding the foreign key references -- that would remove the
+// guarantee that as long as an action cache entry is valid, that all of the CAS objects it refers
+// to are alive in the CAS.  We use the ReferenceTime field to detect inactive CAS blobs.
 //
 // We don't use a row deletion policy even for the action cache table, because we can't control when
 // Spanner actually performs the deletions, which means we can't clean up the CAS as early as we could
 // if we were to handle deletions of the stale action cache entries.  So we do that now, too.
-
+//
 
 import (
 	"context"
@@ -275,8 +255,6 @@ type spannerGCSBlobAccess struct {
 	storageType       string
 	daysToLive        uint64        // to avoid converting back and forth
 	expirationAge     time.Duration // same as above, but easier for time calculations
-	refUpdateThresh   time.Duration // when we start updating ReferenceTime
-	refChan           chan keyLoc
 	serviceId         string
 }
 
@@ -476,8 +454,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 	expirationTime = time.Duration(daysToLive * nsecsPerDay)
 	// The reference time update threshold is half of the expiration age
-	refUpdateThresh := expirationTime / 2
-	log.Printf("daysToLive = %d, expirationTime = %d, refUpdateThresh = %d\n", daysToLive, expirationTime, refUpdateThresh)
+	log.Printf("daysToLive = %d, expirationTime = %d\n", daysToLive, expirationTime)
 
 	spannerGCSBlobAccessPrometheusMetrics.Do(func() {
 		prometheus.MustRegister(spannerMalformedKeyCount)
@@ -563,14 +540,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 
 	log.Printf("NewSpannerGCSBlobAccess type %s", storageType)
 
-	// FindMissing takes care of updaing the reference time on CAS objects, but we'd like to update
-	// AC objects when they're read, to simulate an LRU cache.  Doing this one at a time is inefficient,
-	// and the poor performance was noticed by users.
-	var refCh chan keyLoc
-	if storageType == "AC" {
-		refCh = make(chan keyLoc, maxRefBulkSz)
-	}
-
 	node := os.Getenv("NODE_NAME")
 	id := os.Getenv("HOSTNAME")
 	ba := &spannerGCSBlobAccess{
@@ -583,12 +552,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		storageType:       storageType,
 		daysToLive:        daysToLive,
 		expirationAge:     expirationTime,
-		refUpdateThresh:   refUpdateThresh,
-		refChan:           refCh,
 		serviceId:         node + "-" + id,
-	}
-	if refCh != nil {
-		go ba.bulkUpdate(refCh)
 	}
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
@@ -639,9 +603,10 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	}
 
 	// Grab the row itself
-	now := time.Now().UTC()
+	start := time.Now()
+	now := start.UTC()
 	row, err := ba.spannerClient.Single().ReadRow(ctx, tableName, spanner.Key{key}, []string{"ReferenceTime", "InlineData"})
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_GET).Observe(time.Now().Sub(now).Seconds())
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_GET).Observe(time.Now().Sub(start).Seconds())
 	if err != nil {
 		return buffer.NewBufferFromError(util.StatusWrapfWithCode(err, codes.NotFound, "GET error: ReadRow key %s failed", key))
 	}
@@ -716,9 +681,38 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	if err != nil {
 		return buffer.NewBufferFromError(util.StatusWrapfWithCode(err, codes.Internal, "GET error: key %s, type %v", key, ba.storageType))
 	}
-	if ba.refChan != nil && now.After(s.ReferenceTime.Add(ba.refUpdateThresh)) {
-		log.Printf("GET: scheduling touch reftime for key %s reftime %s", key, s.ReferenceTime)
-		ba.refChan <- keyLoc{key: key, loc: loc}
+	if ba.storageType == "AC" {
+		// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
+		go func() {
+			keys := []string{key}
+			go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
+
+			stmt := spanner.NewStatement(`SELECT DigestKey FROM ` + assocTableName + ` WHERE ActionKey = @key`)
+			stmt.Params["key"] = key
+			start := time.Now()
+			iter := spannerGCSCAS.spannerClient.Single().Query(ctx, stmt)
+			defer iter.Stop()
+			backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+			keysToTouch := make([]string, 0, 128)
+			iter.Do(func(row *spanner.Row) error {
+				var key string
+				err := row.Column(0, &key)
+				if err != nil {
+					log.Printf("ERROR Column 0 wanted Key, got %v", err)
+				}
+				if key == "" {
+					return nil
+				}
+				keysToTouch = append(keysToTouch, key)
+				return nil
+			})
+			if len(keysToTouch) != 0 {
+				go spannerGCSCAS.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
+			}
+		}()
+	} else {
+		keys := []string{key}
+		go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
 	}
 	return b
 }
@@ -961,52 +955,6 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 	ba.touchSpannerObjects(ctx, casTableName, digestKeys, now)
 }
 
-// Process deferred access time updates from action cache GET operations.
-func (ba *spannerGCSBlobAccess) bulkUpdate(in <-chan keyLoc) {
-	keys := make([]string, 0, maxRefBulkSz)
-	locs := make([]int, 0, maxRefBulkSz)
-	keyMap := make(map[string]bool, maxRefBulkSz) // used to dedup the list of keys
-	t := time.NewTimer(maxRefHours * time.Hour)
-	timedout := false
-	for {
-		select {
-		case kl := <-in:
-			if keyMap[kl.key] {
-				log.Printf("SKIPPING duplicate key %s", kl.key)
-			} else {
-				keyMap[kl.key] = true
-				keys = append(keys, kl.key)
-				locs = append(locs, kl.loc)
-			}
-		case <-t.C:
-			timedout = true
-		}
-		if (timedout && len(keys) != 0) || (len(keys) == maxRefBulkSz) {
-			log.Printf("Processing %d delayed reftime updates", len(keys))
-			timedout = true // just so we know to reset the timer if we're here because we've reached maxRefBulkSz
-			now := time.Now().UTC()
-			go ba.touchSpannerObjects(context.Background(), acTableName, keys, now)
-			keys = make([]string, 0, maxRefBulkSz)
-			locs = make([]int, 0, maxRefBulkSz)
-			keyMap = make(map[string]bool, maxRefBulkSz)
-		}
-
-		// We need to reset the timer if we timed out or if we processed a bulk transfer.  We could have timed
-		// out without any work to do, so always check if timedout is true here so we can reset the timer.
-		// Stay away from this pattern:
-		//    if !t.Stop() {
-		//        <-t.C
-		//    }
-		//    t.Reset(...)
-		// It was racy and we'd sometimes block reading from the channel.
-		if timedout {
-			timedout = false
-			t.Stop()
-			t = time.NewTimer(maxRefHours * time.Hour)
-		}
-	}
-}
-
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 	log.Printf("serviceId is %s", ba.serviceId)
 	err := tryLeaderElection(ctx, ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
@@ -1189,6 +1137,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys)`)
 	stmt.Params["keys"] = keys
 	iter = ba.spannerClient.Single().Query(ctx, stmt)
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	err = iter.Do(func(row *spanner.Row) error {
 		var key string
 		err := row.Column(0, &key)
