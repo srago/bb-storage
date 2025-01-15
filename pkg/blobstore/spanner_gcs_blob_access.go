@@ -974,6 +974,8 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 			}
 
 		case <-t2.C:
+			t2.Stop()
+			t2 = time.NewTimer(24 * time.Hour)
 			serviceId, err := queryLeader(ctx, ba.spannerClient, evicterSemId, leaderTimeout)
 			if err != nil {
 				log.Printf("Eviction: can't determine leader: %v", err)
@@ -983,8 +985,6 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 				log.Printf("I am the Evicter!")
 				ba.evictStaleACBlobs(ctx)
 				spannerGCSCAS.evictStaleCASBlobs(ctx)
-				t2.Stop()
-				t2 = time.NewTimer(24 * time.Hour)
 			}
 		}
 
