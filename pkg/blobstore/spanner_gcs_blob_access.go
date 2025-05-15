@@ -281,8 +281,26 @@ type keyLoc struct {
 	loc	int
 }
 
+// Check if a Spanner table exists.  For the purpose of this exercise, if the query fails at all, we assume
+// that the table doesn't exist.
+func tableExists(ctx context.Context, cl *spanner.Client, tableName string) bool {
+	stmt := spanner.NewStatement(`SELECT 1 FROM information_schema.tables WHERE table_name = "` + tableName + `"`)
+	iter := cl.Single().Query(ctx, stmt)
+	_, err := iter.Next()
+	iter.Stop()
+	log.Printf("spanner table %s check, err = %v", tableName, err)
+	if err == nil {
+		// Table exists.
+		return true
+	} else {
+		// Either err is iterator.Done or some other error code.  In either case, we
+		// assume that the table doesn't exist so the caller will try to create it.
+		return false
+	}
+}
+
 // databaseName is of the form "projects/<project ID>/instances/<instance name>/databases/<database name>".
-func createSpannerTables(ctx context.Context, databaseName string, daysToLive uint64) error {
+func createSpannerTables(ctx context.Context, spannerClient *spanner.Client, databaseName string, daysToLive uint64) error {
 	cl, err := database.NewDatabaseAdminClient(ctx)
 	if err != nil {
 		return util.StatusWrap(err, "Can't create spanner database admin client")
@@ -294,84 +312,114 @@ func createSpannerTables(ctx context.Context, databaseName string, daysToLive ui
 		daysToLive = defaultDaysToLive
 	}
 
-	s := `CREATE TABLE IF NOT EXISTS ` + acTableName + ` (
-		Key STRING(MAX),
-		ReferenceTime TIMESTAMP NOT NULL,
-                InlineData BYTES(MAX),
-	) PRIMARY KEY(Key)`
-	op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err = op.Wait(ctx); err != nil {
-		return err
-	}
-
-	s = `CREATE TABLE IF NOT EXISTS ` + casTableName + ` (
-		Key STRING(MAX),
-		ReferenceTime TIMESTAMP NOT NULL,
-                InlineData BYTES(MAX),
-	) PRIMARY KEY(Key)`
-	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err = op.Wait(ctx); err != nil {
-		return err
+	// If necessary, create the table for action cache entries.
+	if !tableExists(ctx, spannerClient, acTableName) {
+		// Table might not exist.  Try to create it.
+		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
+		s := `CREATE TABLE ` + acTableName + ` (
+			Key STRING(MAX),
+			ReferenceTime TIMESTAMP NOT NULL,
+			InlineData BYTES(MAX),
+		) PRIMARY KEY(Key)`
+		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+			Database: databaseName,
+			Statements: []string{
+				s,
+			},
+		})
+		if err == nil {
+			err = op.Wait(ctx)
+		}
+		if err != nil {
+			// We could have raced with another pod.  Check again if the table exists.
+			if !tableExists(ctx, spannerClient, acTableName) {
+				return util.StatusWrapf(err, "Can't create spanner table %s", acTableName)
+			}
+		}
 	}
 
-	// Create the action cache table so that when an action cache entry is evicted by the delete policy, all of the matching records
-	// in the Assoc table are removed.  However, we want to prevent the CAS blobs from being removed until no more action cache entries
-	// refer to them, so we don't cascade deletes from the CAS table.  Attempts to delete a CAS entry will fail if any action cache
-	// entries refer to it.
-	s = `CREATE TABLE IF NOT EXISTS ` + assocTableName + ` (
-		Key STRING(36) DEFAULT (GENERATE_UUID()),
-		ActionKey STRING(MAX) NOT NULL,
-		DigestKey STRING(MAX) NOT NULL,
-		CONSTRAINT FKActionKey FOREIGN KEY(ActionKey) REFERENCES ` + acTableName + `(Key) ON DELETE CASCADE,
-		CONSTRAINT FKDigestKey FOREIGN KEY(DigestKey) REFERENCES ` + casTableName + `(Key)
-	) PRIMARY KEY(Key)`
-	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err = op.Wait(ctx); err != nil {
-		return err
+	// If necessary, create the table for the CAS blobs.
+	if !tableExists(ctx, spannerClient, casTableName) {
+		// Table might not exist.  Try to create it.
+		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
+		s := `CREATE TABLE ` + casTableName + ` (
+			Key STRING(MAX),
+			ReferenceTime TIMESTAMP NOT NULL,
+			InlineData BYTES(MAX),
+		) PRIMARY KEY(Key)`
+		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+			Database: databaseName,
+			Statements: []string{
+				s,
+			},
+		})
+		if err == nil {
+			err = op.Wait(ctx)
+		}
+		if err != nil {
+			// We could have raced with another pod.  Check again if the table exists.
+			if !tableExists(ctx, spannerClient, casTableName) {
+				return util.StatusWrapf(err, "Can't create spanner table %s", casTableName)
+			}
+		}
 	}
 
-	// Create the table used for "leader election" -- we use it to decide which worker is in charge of
+	// If necessary, create the action cache table so that when an action cache entry is evicted by the delete policy,
+	// all of the matching records in the Assoc table are removed.  However, we want to prevent the CAS blobs from being
+	// removed until no more action cache entries refer to them, so we don't cascade deletes from the CAS table.  Attempts
+	// to delete a CAS entry will fail if any action cache entries refer to it.
+	if !tableExists(ctx, spannerClient, assocTableName) {
+		// Table might not exist.  Try to create it.
+		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
+		s := `CREATE TABLE ` + assocTableName + ` (
+			Key STRING(36) DEFAULT (GENERATE_UUID()),
+			ActionKey STRING(MAX) NOT NULL,
+			DigestKey STRING(MAX) NOT NULL,
+			CONSTRAINT FKActionKey FOREIGN KEY(ActionKey) REFERENCES ` + acTableName + `(Key) ON DELETE CASCADE,
+			CONSTRAINT FKDigestKey FOREIGN KEY(DigestKey) REFERENCES ` + casTableName + `(Key)
+		) PRIMARY KEY(Key)`
+		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+			Database: databaseName,
+			Statements: []string{
+				s,
+			},
+		})
+		if err == nil {
+			err = op.Wait(ctx)
+		}
+		if err != nil {
+			// We could have raced with another pod.  Check again if the table exists.
+			if !tableExists(ctx, spannerClient, assocTableName) {
+				return util.StatusWrapf(err, "Can't create spanner table %s", assocTableName)
+			}
+		}
+	}
+
+	// If necessary, create the table used for "leader election" -- we use it to decide which worker is in charge of
 	// evicting stale entries in the action cache and CAS.
-	s = `CREATE TABLE IF NOT EXISTS ` + leaderTableName + ` (
-		SemaphoreId INT64 NOT NULL,
-		ServiceId STRING(1024) NOT NULL,
-		ActivityTimestamp TIMESTAMP NOT NULL
-	) PRIMARY KEY(SemaphoreId)`
-	op, err = cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
-		Database: databaseName,
-		Statements: []string{
-			s,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if err := op.Wait(ctx); err != nil {
-		return err
+	if !tableExists(ctx, spannerClient, leaderTableName) {
+		// Table might not exist.  Try to create it.
+		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
+		s := `CREATE TABLE ` + leaderTableName + ` (
+			SemaphoreId INT64 NOT NULL,
+			ServiceId STRING(1024) NOT NULL,
+			ActivityTimestamp TIMESTAMP NOT NULL
+		) PRIMARY KEY(SemaphoreId)`
+		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
+			Database: databaseName,
+			Statements: []string{
+				s,
+			},
+		})
+		if err == nil {
+			err = op.Wait(ctx)
+		}
+		if err != nil {
+			// We could have raced with another pod.  Check again if the table exists.
+			if !tableExists(ctx, spannerClient, leaderTableName) {
+				return util.StatusWrapf(err, "Can't create spanner table %s", leaderTableName)
+			}
+		}
 	}
 
 	return nil
@@ -489,7 +537,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 
 	// If the spanner tables don't exist, create them.
-	if err = createSpannerTables(ctx, databaseName, daysToLive); err != nil {
+	if err = createSpannerTables(ctx, spannerClient, databaseName, daysToLive); err != nil {
 		spannerClient.Close()
 		return nil, util.StatusWrap(err, "Can't create spanner table")
 	}
