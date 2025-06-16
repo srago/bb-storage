@@ -318,15 +318,17 @@ func createSpannerTables(ctx context.Context, spannerClient *spanner.Client, dat
 	if !tableExists(ctx, spannerClient, acTableName) {
 		// Table might not exist.  Try to create it.
 		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
-		s := `CREATE TABLE ` + acTableName + ` (
+		s1 := `CREATE TABLE ` + acTableName + ` (
 			Key STRING(MAX),
 			ReferenceTime TIMESTAMP NOT NULL,
 			InlineData BYTES(MAX),
-		) PRIMARY KEY(Key); CREATE INDEX RefTimeIdx ON ` + acTableName + `(ReferenceTime ASC)`
+		) PRIMARY KEY(Key)`
+		s2 := `CREATE INDEX RefTimeIdx ON ` + acTableName + ` (ReferenceTime)`
 		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 			Database: databaseName,
 			Statements: []string{
-				s,
+				s1,
+				s2,
 			},
 		})
 		if err == nil {
@@ -344,15 +346,17 @@ func createSpannerTables(ctx context.Context, spannerClient *spanner.Client, dat
 	if !tableExists(ctx, spannerClient, casTableName) {
 		// Table might not exist.  Try to create it.
 		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
-		s := `CREATE TABLE ` + casTableName + ` (
+		s1 := `CREATE TABLE ` + casTableName + ` (
 			Key STRING(MAX),
 			ReferenceTime TIMESTAMP NOT NULL,
 			InlineData BYTES(MAX),
-		) PRIMARY KEY(Key); CREATE INDEX RefTimeIdx ON ` + casTableName + `(ReferenceTime ASC)`
+		) PRIMARY KEY(Key)`
+		s2 := `CREATE INDEX RefTimeIdx ON ` + casTableName + ` (ReferenceTime)`
 		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 			Database: databaseName,
 			Statements: []string{
-				s,
+				s1,
+				s2,
 			},
 		})
 		if err == nil {
@@ -894,8 +898,8 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		ksl = append(ksl, k)
 	}
 
-	// We want to grab anything not in the Blobs table.  First find what's there so we can exclude them from the list
-	// of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
+	// We want to grab anything not in the CAS Blobs table.  First find what's there so we can exclude them from the
+	// list of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
 	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
 	stmt.Params["keys"] = ksl
 	stmt.Params["expdays"] = int64(ba.daysToLive)
@@ -1057,7 +1061,7 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	start := time.Now()
 	// TODO(ragost): what if this thing is a large blob?  Can this happen?
 	stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
-		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+		`@{FORCE_INDEX=RefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	count, err := cl.PartitionedUpdate(ctx, stmt)
 	if err != nil {
@@ -1084,7 +1088,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
 	// any AC entries that reference it, because we just killed all of the stale AC entries.
 	stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-		` WHERE InlineData IS NOT NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+		`@{FORCE_INDEX=RefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	count, err := cl.PartitionedUpdate(ctx, stmt)
 	if err != nil {
@@ -1098,7 +1102,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 
 	// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
 	// NB: there are far fewer large Blobs than small ones, so nothing too fancy here.
-	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE InlineData IS NULL AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + `@{FORCE_INDEX=RefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start = time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
