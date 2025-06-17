@@ -26,8 +26,6 @@ package blobstore
 // if we were to handle deletions of the stale action cache entries.  So we do that now, too.
 //
 
-// TODO(ragost): evaluate using a secondary key for ReferenceTime
-
 import (
 	"context"
 	"errors"
@@ -1061,7 +1059,7 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	start := time.Now()
 	// TODO(ragost): what if this thing is a large blob?  Can this happen?
 	stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
-		`@{FORCE_INDEX=ACRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	count, err := cl.PartitionedUpdate(ctx, stmt)
 	if err != nil {
@@ -1088,7 +1086,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
 	// any AC entries that reference it, because we just killed all of the stale AC entries.
 	stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-		`@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
+		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	count, err := cl.PartitionedUpdate(ctx, stmt)
 	if err != nil {
@@ -1102,7 +1100,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 
 	// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
 	// NB: there are far fewer large Blobs than small ones, so nothing too fancy here.
-	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + `@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
+	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start = time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
