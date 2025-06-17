@@ -1047,7 +1047,7 @@ func (ba *spannerGCSBlobAccess) isCoveredByAction(ctx context.Context, key strin
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 	covered := false
 
-	// We don't need to iterate through all of the rows.  We just need to know if any AC key refers to this CAS key
+	// We don't need to iterate through all of the rows.  We just need to know if any AC entry refers to this CAS key
 	for {
 		_, err := iter.Next()
 		if err == iterator.Done {
@@ -1100,110 +1100,67 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 
 func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	// We want to find all stale entries in the action cache and then delete them.
-	// Paritition this into reasonable sized chunks.  This is needed to make the query root-partitionable.
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
 	log.Printf("Starting Evictions...")
-	count := 0
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func(start int) {
-			defer wg.Done()
-			cfg := spanner.ClientConfig {
-				DisableNativeMetrics: true,
-			}
-			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
-			if err != nil {
-				log.Printf("Can't create a spanner client: %v", err)
-				return
-			}
-			defer cl.Close()
-			for j := start; j < start + 16; j++ {
-				prefix := fmt.Sprintf("%2.2x%%", j)
-				start := time.Now()
-				// TODO(ragost): what if this thing is a large blob?  Can this happen?
-				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
-					` WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-					//`@{FORCE_INDEX=ACRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-				stmt.Params["expdays"] = int64(ba.daysToLive)
-				stmt.Params["prefix"] = prefix
-				nrows, err := cl.PartitionedUpdate(ctx, stmt)
-				if err != nil {
-					// We don't have the number of failed deletes, so can't increment metric
-					log.Printf("Problems evicting AC entries: %v", err)
-					break
-				} else {
-					mu.Lock()
-					count += int(nrows)
-					mu.Unlock()
-				}
-				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-			}
-		}(16 * i)
+	cfg := spanner.ClientConfig {
+		DisableNativeMetrics: true,
 	}
-	wg.Wait()
+	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+	if err != nil {
+		log.Printf("Can't create a spanner client: %v", err)
+		return
+	}
+	defer cl.Close()
+	start := time.Now()
+	// TODO(ragost): what if this thing is a large blob?  Can this happen?
+	stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
+		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+	stmt.Params["expdays"] = int64(ba.daysToLive)
+	count, err := cl.PartitionedUpdate(ctx, stmt)
+	if err != nil {
+		// We don't have the number of failed deletes, so can't increment metric
+		log.Printf("Problems evicting AC entries: %v", err)
+	}
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	spannerDeleteActionCount.Add(float64(count))
 	log.Printf("Evicted %d entries from the AC", count)
 }
 
 func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
-	// Paritition this into reasonable sized chunks.  This is needed to make the query root-partitionable.
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	count := 0
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func(start int) {
-			defer wg.Done()
-			cfg := spanner.ClientConfig {
-				DisableNativeMetrics: true,
-			}
-			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
-			if err != nil {
-				log.Printf("Can't create a spanner client: %v", err)
-				return
-			}
-			defer cl.Close()
-			for j := start; j < start + 16; j++ {
-				prefix := fmt.Sprintf("%2.2x%%", j)
-				start := time.Now()
-				// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
-				// any AC entries that reference it, because we just killed all of the stale AC entries.
-				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-					`@{FORCE_INDEX=CASRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
-				stmt.Params["expdays"] = int64(ba.daysToLive)
-				stmt.Params["prefix"] = prefix
-				nrows, err := cl.PartitionedUpdate(ctx, stmt)
-				if err != nil {
-					// We don't have the number of failed deletes, so can't increment metric
-					log.Printf("Problems evicting small Blobs: %v", err)
-					break
-				} else {
-					mu.Lock()
-					count += int(nrows)
-					mu.Unlock()
-				}
-				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-			}
-		}(16 * i)
+	cfg := spanner.ClientConfig {
+		DisableNativeMetrics: true,
 	}
-	wg.Wait()
+	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+	if err != nil {
+		log.Printf("Can't create a spanner client: %v", err)
+		return
+	}
+	defer cl.Close()
+	start := time.Now()
+	// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
+	// any AC entries that reference it, because we just killed all of the stale AC entries.
+	stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
+	stmt.Params["expdays"] = int64(ba.daysToLive)
+	count, err := cl.PartitionedUpdate(ctx, stmt)
+	if err != nil {
+		// We don't have the number of failed deletes, so can't increment metric
+		log.Printf("Problems evicting small Blobs: %v", err)
+	}
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	spannerDeleteBlobCount.Add(float64(count))
 	log.Printf("Evicted %d small blobs from the CAS", count)
 
 	// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
 	// NB: there are far fewer large Blobs than small ones, so nothing too fancy here.
-	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + `@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
+	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
-	start := time.Now()
+	start = time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
 	defer iter.Stop()
 
 	keys := make([]string, 0, 1000)
-	err := iter.Do(func(row *spanner.Row) error {
+	err = iter.Do(func(row *spanner.Row) error {
 		// Errors in this function (interpretting the row results) should only occur if someone changes the
 		// schema without updating this file.
 		var key string
