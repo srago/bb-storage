@@ -1124,7 +1124,8 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 				start := time.Now()
 				// TODO(ragost): what if this thing is a large blob?  Can this happen?
 				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
-					`@{FORCE_INDEX=ACRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+					` WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+					//`@{FORCE_INDEX=ACRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 				stmt.Params["expdays"] = int64(ba.daysToLive)
 				stmt.Params["prefix"] = prefix
 				nrows, err := cl.PartitionedUpdate(ctx, stmt)
