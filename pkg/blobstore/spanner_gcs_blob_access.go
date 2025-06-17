@@ -25,8 +25,17 @@ package blobstore
 // Spanner actually performs the deletions, which means we can't clean up the CAS as early as we could
 // if we were to handle deletions of the stale action cache entries.  So we do that now, too.
 //
-
-// TODO(ragost): evaluate using a secondary key for ReferenceTime
+// We use an LRU-like algorithm to reduce the frequency of ReferenceTime updates.  It has two arenas:
+// one of objects that will expire in the configured timeframe, and one of objects that have been
+// extended by having their reference times updated to the latest time they were referenced, but only
+// when they have remained in the cache for half of their configured lifetimes.  This removes the need
+// to update young objects that are accessed multiple times when they first enter the cache.  Similarly,
+// when an object's reference time is updated, it will not receive further updates until it has spent
+// an additional amount of time in the cache equal to half of the configured lifetime.
+//
+// We further reduce the frequency of ReferenceTime updates by skipping CAS ReferenceTime updates in Get
+// when there is an action cache entry that refers to one of those blobs, because we update them when we
+// update the ReferenceTime of the ActionCache entry that refers to them is read.
 
 import (
 	"context"
@@ -49,6 +58,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -257,6 +267,7 @@ type spannerGCSBlobAccess struct {
 	storageType       string
 	daysToLive        uint64        // to avoid converting back and forth
 	expirationAge     time.Duration // same as above, but easier for time calculations
+	refUpdateThresh   time.Duration // when we start updating ReferenceTime
 	serviceId         string
 }
 
@@ -606,6 +617,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		storageType:       storageType,
 		daysToLive:        daysToLive,
 		expirationAge:     expirationTime,
+		refUpdateThresh:   expirationTime / time.Duration(2),  // half of the expiration age
 		serviceId:         node + "-" + id,
 	}
 	if storageType == "CAS" {
@@ -735,38 +747,42 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	if err != nil {
 		return buffer.NewBufferFromError(util.StatusWrapfWithCode(err, codes.Internal, "GET error: key %s, type %v", key, ba.storageType))
 	}
-	if ba.storageType == "AC" {
-		// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
-		go func() {
+	if now.After(s.ReferenceTime.Add(ba.refUpdateThresh)) {
+		if ba.storageType == "AC" {
+			log.Printf("GET: scheduling touch reftime for key %s reftime %s", key, s.ReferenceTime)
+
+			// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
+			go func() {
+				keys := []string{key}
+				go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
+
+				stmt := spanner.NewStatement(`SELECT DigestKey FROM ` + assocTableName + ` WHERE ActionKey = @key`)
+				stmt.Params["key"] = key
+				start := time.Now()
+				iter := spannerGCSCAS.spannerClient.Single().Query(ctx, stmt)
+				defer iter.Stop()
+				backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+				keysToTouch := make([]string, 0, 128)
+				iter.Do(func(row *spanner.Row) error {
+					var key string
+					err := row.Column(0, &key)
+					if err != nil {
+						log.Printf("ERROR Column 0 wanted Key, got %v", err)
+					}
+					if key == "" {
+						return nil
+					}
+					keysToTouch = append(keysToTouch, key)
+					return nil
+				})
+				if len(keysToTouch) != 0 {
+					go spannerGCSCAS.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
+				}
+			}()
+		} else if !ba.isCoveredByAction(ctx, key) {
 			keys := []string{key}
 			go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
-
-			stmt := spanner.NewStatement(`SELECT DigestKey FROM ` + assocTableName + ` WHERE ActionKey = @key`)
-			stmt.Params["key"] = key
-			start := time.Now()
-			iter := spannerGCSCAS.spannerClient.Single().Query(ctx, stmt)
-			defer iter.Stop()
-			backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
-			keysToTouch := make([]string, 0, 128)
-			iter.Do(func(row *spanner.Row) error {
-				var key string
-				err := row.Column(0, &key)
-				if err != nil {
-					log.Printf("ERROR Column 0 wanted Key, got %v", err)
-				}
-				if key == "" {
-					return nil
-				}
-				keysToTouch = append(keysToTouch, key)
-				return nil
-			})
-			if len(keysToTouch) != 0 {
-				go spannerGCSCAS.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
-			}
-		}()
-	} else {
-		keys := []string{key}
-		go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
+		}
 	}
 	return b
 }
@@ -900,7 +916,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 
 	// We want to grab anything not in the CAS Blobs table.  First find what's there so we can exclude them from the
 	// list of missing blobs.  Then decide which of the existing ones need their reftime to be updated.
-	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
+	stmt := spanner.NewStatement(`SELECT Key, ReferenceTime FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys) and TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) < @expdays`)
 	stmt.Params["keys"] = ksl
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start := time.Now()
@@ -910,8 +926,10 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 
 	missing := digest.NewSetBuilder()
 	keysToTouch := make([]string, 0, digests.Length())
+	now := time.Now().UTC()
 	err := iter.Do(func(row *spanner.Row) error {
 		var key string
+		var refTime time.Time
 		err := row.Column(0, &key)
 		if err != nil {
 			log.Printf("ERROR Column 0 wanted Key, got %v", err)
@@ -919,7 +937,13 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		if key == "" {
 			return nil
 		}
-		keysToTouch = append(keysToTouch, key)
+		err = row.Column(1, &refTime)
+		if err != nil {
+			log.Printf("ERROR Column 1 wanted ReferenceTime, got %v", err)
+		}
+		if now.After(refTime.Add(ba.refUpdateThresh)) {
+			keysToTouch = append(keysToTouch, key)
+		}
 		delete(keyToDigest, key)
 		return nil
 	})
@@ -934,8 +958,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	}
 
 	// Now update the ReferenceTime field for the Spanner blobs we have.  GCS blobs also have records in spanner to make FindMissing
-	// efficient and prevent large CAS blobs from being evicted before and action cache entries that reference them.
-	now := time.Now().UTC()
+	// efficient and prevent large CAS blobs from being evicted before any action cache entries that reference them.
 	if len(keysToTouch) != 0 {
 		ba.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
 	}
@@ -1006,7 +1029,36 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 		return nil
 	})
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	// Because this is part of adding associations to the Assoc table, no need to check refUpdateThresh.  This ensures that
+	// every CAS object referenced by an action is no older than any action.  This helps to avoid attempting to evict CAS
+	// blobs that are still referenced by an action cache entry.
 	ba.touchSpannerObjects(ctx, casTableName, digestKeys, now)
+}
+
+func (ba *spannerGCSBlobAccess) isCoveredByAction(ctx context.Context, key string) bool {
+	if ba.storageType == "AC" {
+		panic("Can't call isCoveredByAction by Action Cache")
+	}
+	stmt := spanner.NewStatement(`SELECT ActionKey FROM ` + assocTableName + ` WHERE DigestKey = @key`)
+	stmt.Params["key"] = key
+	start := time.Now()
+	iter := ba.spannerClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
+	covered := false
+
+	// We don't need to iterate through all of the rows.  We just need to know if any AC key refers to this CAS key
+	for {
+		_, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err == nil {
+			covered = true
+			break
+		}
+	}
+	return covered
 }
 
 func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
@@ -1048,68 +1100,109 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(ctx context.Context) {
 
 func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	// We want to find all stale entries in the action cache and then delete them.
+	// Paritition this into reasonable sized chunks.  This is needed to make the query root-partitionable.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
 	log.Printf("Starting Evictions...")
-	cfg := spanner.ClientConfig {
-		DisableNativeMetrics: true,
+	count := 0
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(start int) {
+			defer wg.Done()
+			cfg := spanner.ClientConfig {
+				DisableNativeMetrics: true,
+			}
+			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+			if err != nil {
+				log.Printf("Can't create a spanner client: %v", err)
+				return
+			}
+			defer cl.Close()
+			for j := start; j < start + 16; j++ {
+				prefix := fmt.Sprintf("%2.2x%%", j)
+				start := time.Now()
+				// TODO(ragost): what if this thing is a large blob?  Can this happen?
+				stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
+					`@{FORCE_INDEX=ACRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
+				stmt.Params["expdays"] = int64(ba.daysToLive)
+				stmt.Params["prefix"] = prefix
+				nrows, err := cl.PartitionedUpdate(ctx, stmt)
+				if err != nil {
+					// We don't have the number of failed deletes, so can't increment metric
+					log.Printf("Problems evicting AC entries: %v", err)
+					break
+				} else {
+					mu.Lock()
+					count += int(nrows)
+					mu.Unlock()
+				}
+				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+			}
+		}(16 * i)
 	}
-	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
-	if err != nil {
-		log.Printf("Can't create a spanner client: %v", err)
-		return
-	}
-	defer cl.Close()
-	start := time.Now()
-	// TODO(ragost): what if this thing is a large blob?  Can this happen?
-	stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
-		`@{FORCE_INDEX=ACRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
-	stmt.Params["expdays"] = int64(ba.daysToLive)
-	count, err := cl.PartitionedUpdate(ctx, stmt)
-	if err != nil {
-		// We don't have the number of failed deletes, so can't increment metric
-		log.Printf("Problems evicting AC entries: %v", err)
-	}
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	wg.Wait()
 	spannerDeleteActionCount.Add(float64(count))
 	log.Printf("Evicted %d entries from the AC", count)
 }
 
 func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	// We want to find all stale entries in the CAS and then delete them.  Start with the small blobs.
-	cfg := spanner.ClientConfig {
-		DisableNativeMetrics: true,
+	// Paritition this into reasonable sized chunks.  This is needed to make the query root-partitionable.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	count := 0
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(start int) {
+			defer wg.Done()
+			cfg := spanner.ClientConfig {
+				DisableNativeMetrics: true,
+			}
+			cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+			if err != nil {
+				log.Printf("Can't create a spanner client: %v", err)
+				return
+			}
+			defer cl.Close()
+			for j := start; j < start + 16; j++ {
+				prefix := fmt.Sprintf("%2.2x%%", j)
+				start := time.Now()
+				// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
+				// any AC entries that reference it, because we just killed all of the stale AC entries.
+				stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
+					`@{FORCE_INDEX=CASRefTimeIdx} WHERE Key LIKE @prefix AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
+				stmt.Params["expdays"] = int64(ba.daysToLive)
+				stmt.Params["prefix"] = prefix
+				nrows, err := cl.PartitionedUpdate(ctx, stmt)
+				if err != nil {
+					// We don't have the number of failed deletes, so can't increment metric
+					log.Printf("Problems evicting small Blobs: %v", err)
+					break
+				} else {
+					mu.Lock()
+					count += int(nrows)
+					mu.Unlock()
+				}
+				backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+			}
+		}(16 * i)
 	}
-	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
-	if err != nil {
-		log.Printf("Can't create a spanner client: %v", err)
-		return
-	}
-	defer cl.Close()
-	start := time.Now()
-	// If a CAS blob hasn't been referenced in the configured lifetime, then by definition there can't be
-	// any AC entries that reference it, because we just killed all of the stale AC entries.
-	stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
-		`@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
-	stmt.Params["expdays"] = int64(ba.daysToLive)
-	count, err := cl.PartitionedUpdate(ctx, stmt)
-	if err != nil {
-		// We don't have the number of failed deletes, so can't increment metric
-		log.Printf("Problems evicting small Blobs: %v", err)
-	}
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	wg.Wait()
 	spannerDeleteBlobCount.Add(float64(count))
 	log.Printf("Evicted %d small blobs from the CAS", count)
 
-
 	// Now delete the stale large Blobs.  First we need to get a list of the keys so we can delete them from GCS.
 	// NB: there are far fewer large Blobs than small ones, so nothing too fancy here.
-	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + `@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
+	stmt := spanner.NewStatement(`SELECT Key FROM ` + casTableName + `@{FORCE_INDEX=CASRefTimeIdx} WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
-	start = time.Now()
+	start := time.Now()
 	iter := ba.spannerClient.Single().Query(ctx, stmt)
 	defer iter.Stop()
 
 	keys := make([]string, 0, 1000)
-	err = iter.Do(func(row *spanner.Row) error {
+	err := iter.Do(func(row *spanner.Row) error {
 		// Errors in this function (interpretting the row results) should only occur if someone changes the
 		// schema without updating this file.
 		var key string
