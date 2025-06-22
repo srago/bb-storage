@@ -628,7 +628,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		// One worker gets to handle evictions.  Handle multiple clusters sharing the same set of tables by
 		// including the node name in the serviceId used in leader election.
 		if len(s) > 0 && s[0] == "worker" {
-			go ba.periodicEvicter(ctx)
+			go ba.periodicEvicter(context.Background())
 		}
 	}
 	return ba, nil
