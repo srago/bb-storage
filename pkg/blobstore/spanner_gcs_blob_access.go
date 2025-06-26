@@ -1028,7 +1028,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 		}
 		return nil
 	})
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
+	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 	// Because this is part of adding associations to the Assoc table, no need to check refUpdateThresh.  This ensures that
 	// every CAS object referenced by an action is no older than any action.  This helps to avoid attempting to evict CAS
 	// blobs that are still referenced by an action cache entry.
@@ -1104,7 +1104,9 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	cfg := spanner.ClientConfig {
 		DisableNativeMetrics: true,
 	}
-	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+	nctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cl, err := spanner.NewClientWithConfig(nctx, ba.databaseName, cfg)
 	if err != nil {
 		log.Printf("Can't create a spanner client: %v", err)
 		return
@@ -1115,7 +1117,7 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	stmt := spanner.NewStatement(`DELETE FROM ` + acTableName +
 		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
-	count, err := cl.PartitionedUpdate(ctx, stmt)
+	count, err := cl.PartitionedUpdate(nctx, stmt)
 	if err != nil {
 		// We don't have the number of failed deletes, so can't increment metric
 		log.Printf("Problems evicting AC entries: %v", err)
@@ -1130,7 +1132,9 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	cfg := spanner.ClientConfig {
 		DisableNativeMetrics: true,
 	}
-	cl, err := spanner.NewClientWithConfig(ctx, ba.databaseName, cfg)
+	nctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cl, err := spanner.NewClientWithConfig(nctx, ba.databaseName, cfg)
 	if err != nil {
 		log.Printf("Can't create a spanner client: %v", err)
 		return
@@ -1142,7 +1146,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	stmt := spanner.NewStatement(`DELETE FROM ` + casTableName +
 		` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NOT NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
-	count, err := cl.PartitionedUpdate(ctx, stmt)
+	count, err := cl.PartitionedUpdate(nctx, stmt)
 	if err != nil {
 		// We don't have the number of failed deletes, so can't increment metric
 		log.Printf("Problems evicting small Blobs: %v", err)
@@ -1156,7 +1160,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays AND InlineData IS NULL`)
 	stmt.Params["expdays"] = int64(ba.daysToLive)
 	start = time.Now()
-	iter := ba.spannerClient.Single().Query(ctx, stmt)
+	iter := ba.spannerClient.Single().Query(nctx, stmt)
 	defer iter.Stop()
 
 	keys := make([]string, 0, 1000)
@@ -1187,7 +1191,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 		` WHERE Key IN UNNEST(@keys) AND TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), ReferenceTime, DAY) >= @expdays`)
 	stmt.Params["keys"] = keys
 	stmt.Params["expdays"] = int64(ba.daysToLive)
-	_, err = ba.spannerClient.PartitionedUpdate(ctx, stmt)
+	_, err = ba.spannerClient.PartitionedUpdate(nctx, stmt)
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	if err != nil {
 		log.Printf("Problem evicting large Blobs: %v", err)
@@ -1199,7 +1203,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	start = time.Now()
 	stmt = spanner.NewStatement(`SELECT Key FROM ` + casTableName + ` WHERE Key IN UNNEST(@keys)`)
 	stmt.Params["keys"] = keys
-	iter = ba.spannerClient.Single().Query(ctx, stmt)
+	iter = ba.spannerClient.Single().Query(nctx, stmt)
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 	err = iter.Do(func(row *spanner.Row) error {
 		var key string
@@ -1222,7 +1226,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	for _, key := range keys {
 		object := ba.gcsBucket.Object(key)
 		start := time.Now()
-		err = object.Delete(ctx)
+		err = object.Delete(nctx)
 		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 		if err != nil {
 			log.Printf("Can't evict large Blob %s: %v", key, err)
@@ -1369,7 +1373,10 @@ func (dk *digestKeys) add(blobDigest *remoteexecution.Digest) error {
 		if err != nil {
 			return err
 		}
-		dk.keys = append(dk.keys, spannerGCSCAS.digestToKey(derivedDigest))
+		// Never add the digest for an empty file to the CAS.
+		if derivedDigest.GetSizeBytes() != 0 {
+			dk.keys = append(dk.keys, spannerGCSCAS.digestToKey(derivedDigest))
+		}
 	}
 	return nil
 }
