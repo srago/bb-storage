@@ -86,7 +86,9 @@ const (
 	maxRefBulkSz            = 600 // Maximum number of hashes to gather before doing a bulk reftime update
 	maxRefHours             = 1   // Maximum time to wait before updating reference times
 	defaultDaysToLive       = 14
-	nsecsPerDay             = 86400000000000
+	nsecsPerSec       int64	= 1000000000
+	nsecsPerDay       int64 = nsecsPerSec * 60 * 60 * 24
+
 
 
 	// Labels for backend metrics
@@ -502,7 +504,7 @@ func (ba *spannerGCSBlobAccess) findLocFromKey(key string) (int, error) {
 }
 
 func roundUpToDay(d time.Duration) time.Duration {
-	return ((d + nsecsPerDay - 1) / nsecsPerDay) * nsecsPerDay
+	return time.Duration(((int64(d) + nsecsPerDay - 1) / nsecsPerDay) * nsecsPerDay)
 }
 
 // NewSpannerGCSBlobAccess creates a BlobAccess that uses Spanner and GCS as its backing store.
@@ -515,9 +517,9 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	if expirationTime == 0 {
 		daysToLive = defaultDaysToLive
 	} else {
-		daysToLive = uint64(roundUpToDay(expirationTime) / nsecsPerDay)
+		daysToLive = uint64(roundUpToDay(expirationTime) / time.Duration(nsecsPerDay))
 	}
-	expirationTime = time.Duration(daysToLive * nsecsPerDay)
+	expirationTime = time.Duration(daysToLive * uint64(nsecsPerDay))
 	// The reference time update threshold is half of the expiration age
 	log.Printf("daysToLive = %d, expirationTime = %d\n", daysToLive, expirationTime)
 
@@ -1104,7 +1106,8 @@ func (ba *spannerGCSBlobAccess) evictStaleACBlobs(ctx context.Context) {
 	cfg := spanner.ClientConfig {
 		DisableNativeMetrics: true,
 	}
-	nctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	d := time.Now().Add(time.Duration(60 * nsecsPerSec))
+	nctx, cancel := context.WithDeadline(context.Background(), d)
 	defer cancel()
 	cl, err := spanner.NewClientWithConfig(nctx, ba.databaseName, cfg)
 	if err != nil {
@@ -1132,7 +1135,8 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs(ctx context.Context) {
 	cfg := spanner.ClientConfig {
 		DisableNativeMetrics: true,
 	}
-	nctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	d := time.Now().Add(time.Duration(240 * nsecsPerSec))
+	nctx, cancel := context.WithDeadline(context.Background(), d)
 	defer cancel()
 	cl, err := spanner.NewClientWithConfig(nctx, ba.databaseName, cfg)
 	if err != nil {
