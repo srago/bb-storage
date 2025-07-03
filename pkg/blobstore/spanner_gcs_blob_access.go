@@ -823,7 +823,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		}
 
 		digestKeys, err = ba.getDigestKeysFromActionResult(ctx, digest.GetDigestFunction(), actionResult.(*remoteexecution.ActionResult))
-		if err != nil || len(digestKeys) == 0 {
+		if err != nil {
 			b2.Discard()
 			// TODO(ragost): check for this message in the GCP logs
 			return util.StatusWrap(err, "Can't get dependent blobs from ActionResult")
