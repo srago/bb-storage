@@ -754,7 +754,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	if now.After(s.ReferenceTime.Add(ba.refUpdateThresh)) {
 		if ba.storageType == "AC" {
 			// TODO(ragost): check for this message in the GCP logs -- YES, the frontends register this
-			log.Printf("GET: scheduling touch reftime for key %s reftime %s", key, s.ReferenceTime)
+			log.Printf("GET: scheduling touch reftime for key %s reftime %s now %s", key, s.ReferenceTime, now)
 
 			// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
 			go func() {
@@ -768,16 +768,19 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 				defer iter.Stop()
 				backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 				keysToTouch := make([]string, 0, 128)
+				i := 0
 				iter.Do(func(row *spanner.Row) error {
+					i++
 					var dkey string
 					err := row.Column(0, &dkey)
 					if err != nil {
 						// TODO(ragost): check for this message in the GCP logs -- NOT seen
 						log.Printf("ERROR Column 0 wanted Key, got %v", err)
 					}
+					log.Printf("row %d, read key %s", i, dkey)
 					if dkey != "" {
 						keysToTouch = append(keysToTouch, dkey)
-						log.Printf("get AC, touch referenced blob %s to %v", dkey, now)
+						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
 					}
 					return nil
 				})
@@ -788,7 +791,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 				}
 			}()
 		} else if !ba.isCoveredByAction(ctx, key) {
-			log.Printf("get CAS, touch blob %s to %v", key, now)
+			log.Printf("get CAS, touch blob %s to %s", key, now)
 			keys := []string{key}
 			go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
 		}
@@ -954,7 +957,7 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		}
 		if now.After(refTime.Add(ba.refUpdateThresh)) {
 			keysToTouch = append(keysToTouch, key)
-			log.Printf("FindMissing, touch blob %s to %v", key, now)
+			log.Printf("FindMissing, touch blob %s to %s", key, now)
 		}
 		delete(keyToDigest, key)
 		return nil
@@ -1026,7 +1029,7 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 	assocRecs = make([]assocRecord, len(digestKeys))
 	for idx, _ := range digestKeys {
 		assocRecs[idx].ActionKey = key
-		log.Printf("adding association for %s, will touch to %v", digestKeys[idx], now)
+		log.Printf("adding association for %s, will touch to %s", digestKeys[idx], now)
 		assocRecs[idx].DigestKey = digestKeys[idx]
 	}
 	start := time.Now()
@@ -1202,6 +1205,11 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		log.Printf("Can't evict large Blobs: %v", err)
 	}
 
+	if len(keys) == 0 {
+		log.Printf("Evicted 0 large blobs from the CAS")
+		return
+	}
+
 	// To avoid racing with clients uploading the same CAS blob that we're trying to evict, we still rely on the reference
 	// time to prevent us from deleting an instance of the reloaded blob. 
 	d = time.Now().Add(time.Duration(600 * nsecsPerSec))
@@ -1244,6 +1252,11 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		})
 		return nil
 	})
+
+	if len(keys) == 0 {
+		log.Printf("Evicted 0 large blobs from the CAS after accounting for races")
+		return
+	}
 
 	errDel := 0
 	// Finally remove the large blobs from GCS.
@@ -1465,7 +1478,7 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 			return err
 		}
 		if serviceId == "" {
-			return nil
+			log.Printf("no serviceId found in leader table")
 		}
 		return nil
 	})
