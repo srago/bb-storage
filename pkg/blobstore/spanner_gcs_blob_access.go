@@ -1472,22 +1472,22 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	if iter.RowCount == 0 {
 		log.Printf("WARNING: didn't find any matching rows in leader table")
 		// TODO(ragost): redo the query to get the ActivityTimestamp and log that
-		stmt := spanner.NewStatement(`SELECT ServiceId, ActivityTimestamp FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
+		stmt := spanner.NewStatement(`SELECT * FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
 		stmt.Params["semId"] = semId
-		stmt.Params["timeout"] = timeoutSecs
 		iter := cl.Single().Query(ctx, stmt)
 		defer iter.Stop()
+		log.Printf("query rowcount = %d", iter.RowCount)
 		if iter.RowCount == 1 {
 			var serviceId string
 			var activityTs time.Time
 			iter.Do(func(row *spanner.Row) error {
-				err := row.Column(0, &serviceId)
+				err := row.Column(1, &serviceId)
 				if err != nil {
-					log.Printf("ERROR Column 0 wanted ServiceId, got %v", err)
+					log.Printf("ERROR Column 1 wanted ServiceId, got %v", err)
 				}
-				err = row.Column(1, &activityTs)
+				err = row.Column(2, &activityTs)
 				if err != nil {
-					log.Printf("ERROR Column 1 wanted ActivityTimestamp, got %v", err)
+					log.Printf("ERROR Column 2 wanted ActivityTimestamp, got %v", err)
 				}
 				return nil
 			})
