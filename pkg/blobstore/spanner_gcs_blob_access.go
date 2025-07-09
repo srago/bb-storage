@@ -40,7 +40,6 @@ package blobstore
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -1466,10 +1465,30 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	stmt.Params["timeout"] = timeoutSecs
 	iter := cl.Single().Query(ctx, stmt)
 	defer iter.Stop()
-	if iter.RowCount > 1 {
-		return "", fmt.Errorf("Invalid Row Count in %s", leaderTableName)
+	rowCount := 0
+	var serviceId string
+	var err error
+	for {
+		row, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("queryLeader iterator error %v", err)
+			return "", err
+		}
+		rowCount++
+		err = row.Column(0, &serviceId)
+		if err != nil {
+			log.Printf("queryLeader column extraction error %v", err)
+			return "", err
+		}
+		if serviceId == "" {
+			log.Printf("row %d: no serviceId found in leader table", rowCount)
+		}
 	}
-	if iter.RowCount == 0 {
+	log.Printf("rowcount = %d", rowCount)
+	if rowCount == 0 {
 		log.Printf("WARNING: didn't find any matching rows in leader table")
 		// TODO(ragost): redo the query to get the ActivityTimestamp and log that
 		stmt := spanner.NewStatement(`SELECT * FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
@@ -1477,33 +1496,39 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		iter := cl.Single().Query(ctx, stmt)
 		defer iter.Stop()
 		log.Printf("query rowcount = %d", iter.RowCount)
-		if iter.RowCount == 1 {
-			var serviceId string
-			var activityTs time.Time
-			iter.Do(func(row *spanner.Row) error {
-				err := row.Column(1, &serviceId)
-				if err != nil {
-					log.Printf("ERROR Column 1 wanted ServiceId, got %v", err)
-				}
-				err = row.Column(2, &activityTs)
-				if err != nil {
-					log.Printf("ERROR Column 2 wanted ActivityTimestamp, got %v", err)
-				}
-				return nil
-			})
-			log.Printf("found ServiceId %s, ActivityTimestamp %s", serviceId, activityTs)
+		rowCount = 0
+		var serviceId string
+		var activityTs time.Time
+		for {
+			row, err := iter.Next()
+			if err == iterator.Done {
+				log.Printf("iterator done")
+				break
+			}
+			if err != nil {
+				log.Printf("queryLeader iterator error %v", err)
+			}
+			rowCount++
+			err = row.Column(1, &serviceId)
+			if err != nil {
+				log.Printf("ERROR: row %d, column 1 wanted ServiceId, got %v", rowCount, err)
+			}
+			err = row.Column(2, &activityTs)
+			if err != nil {
+				log.Printf("ERROR: row %d, column 2 wanted ActivityTimestamp, got %v", rowCount, err)
+			}
 		}
+		log.Printf("rowCount = %d, found ServiceId %s, ActivityTimestamp %s", rowCount, serviceId, activityTs)
 	}
-	var serviceId string
-	err := iter.Do(func(row *spanner.Row) error {
-		err := row.Column(0, &serviceId)
-		if err != nil {
-			return err
-		}
-		if serviceId == "" {
-			log.Printf("no serviceId found in leader table")
-		}
-		return nil
-	})
+	//err := iter.Do(func(row *spanner.Row) error {
+	//	err := row.Column(0, &serviceId)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	if serviceId == "" {
+	//		log.Printf("no serviceId found in leader table")
+	//	}
+	//	return nil
+	//})
 	return serviceId, err
 }
