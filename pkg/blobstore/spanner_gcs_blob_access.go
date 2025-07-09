@@ -83,8 +83,6 @@ const (
 	evicterSemId            = 1
 	leaderTimeout		= 60 * 60 // 1 hour in seconds (eviction only runs once a day, so this is big enough to not waste too many cycles)
 	leaderCheckInterval     = 30 * 60 // check every 30 minutes (also in seconds)
-	maxRefBulkSz            = 600 // Maximum number of hashes to gather before doing a bulk reftime update
-	maxRefHours             = 1   // Maximum time to wait before updating reference times
 	defaultDaysToLive       = 14
 	nsecsPerSec       int64	= 1000000000
 	nsecsPerDay       int64 = nsecsPerSec * 60 * 60 * 24
@@ -1470,6 +1468,31 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	defer iter.Stop()
 	if iter.RowCount > 1 {
 		return "", fmt.Errorf("Invalid Row Count in %s", leaderTableName)
+	}
+	if iter.RowCount == 0 {
+		log.Printf("WARNING: didn't find any matching rows in leader table")
+		// TODO(ragost): redo the query to get the ActivityTimestamp and log that
+		stmt := spanner.NewStatement(`SELECT ServiceId, ActivityTimestamp FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
+		stmt.Params["semId"] = semId
+		stmt.Params["timeout"] = timeoutSecs
+		iter := cl.Single().Query(ctx, stmt)
+		defer iter.Stop()
+		if iter.RowCount == 1 {
+			var serviceId string
+			var activityTs time.Time
+			iter.Do(func(row *spanner.Row) error {
+				err := row.Column(0, &serviceId)
+				if err != nil {
+					log.Printf("ERROR Column 0 wanted ServiceId, got %v", err)
+				}
+				err = row.Column(1, &activityTs)
+				if err != nil {
+					log.Printf("ERROR Column 1 wanted ActivityTimestamp, got %v", err)
+				}
+				return nil
+			})
+			log.Printf("found ServiceId %s, ActivityTimestamp %s", serviceId, activityTs)
+		}
 	}
 	var serviceId string
 	err := iter.Do(func(row *spanner.Row) error {
