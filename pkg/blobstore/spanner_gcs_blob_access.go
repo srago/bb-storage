@@ -773,6 +773,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					if err != nil {
 						// TODO(ragost): check for this message in the GCP logs -- NOT seen
 						log.Printf("ERROR Column 0 wanted Key, got %v", err)
+						// return err
 					}
 					log.Printf("row %d, read key %s", i, dkey)
 					if dkey != "" {
@@ -1081,7 +1082,7 @@ func (ba *spannerGCSBlobAccess) periodicEvicter() {
 		log.Printf("Eviction: leader election failed: %v", err)
 	}
 	t1 := time.NewTimer(leaderCheckInterval * time.Second)  // leader election frequency
-	t2 := time.NewTimer(1 * time.Hour)  // time before first check for evictions
+	t2 := time.NewTimer(((2 * leaderCheckInterval) + 300) * time.Second)  // time before first check for evictions, allows for leader election to complete after pod deployment
 	for {
 		select {
 		case <-t1.C:
