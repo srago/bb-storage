@@ -992,10 +992,9 @@ func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, tableNa
 		// Hopefully this is more efficient than doing a read-modify-write.  Tried InsertOrUpdateStruct(),
 		// but that set the InlineData field to NULL, contradicting the manual page that "Any column values
 		// not explicitly written are preserved."
-		refTime := t.Format(time.RFC3339)
 		stmt := spanner.NewStatement(`UPDATE ` + tableName + ` SET ReferenceTime = TIMESTAMP(@reftime) WHERE Key in unnest(@keys)`)
 		stmt.Params["keys"] = keys
-		stmt.Params["reftime"] = refTime
+		stmt.Params["reftime"] = t
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
 			spannerReftimeUpdateFailedCount.Inc()
