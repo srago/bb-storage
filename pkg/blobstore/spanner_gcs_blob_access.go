@@ -782,6 +782,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					}
 					return nil
 				})
+				log.Printf("rows scanned = %d",i)
 				// TODO(ragost): Monitor this to see if len is ever 0
 				log.Printf("len(keysToTouch) is %d", len(keysToTouch))
 				if len(keysToTouch) != 0 {
