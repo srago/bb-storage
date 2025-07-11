@@ -999,7 +999,7 @@ func (ba *spannerGCSBlobAccess) touchSpannerObjects(ctx context.Context, tableNa
 		// not explicitly written are preserved."
 		stmt := spanner.NewStatement(`UPDATE ` + tableName + ` SET ReferenceTime = TIMESTAMP(@reftime) WHERE Key in unnest(@keys)`)
 		stmt.Params["keys"] = keys
-		stmt.Params["reftime"] = t
+		stmt.Params["reftime"] = t.Format(time.RFC3339)
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
 			spannerReftimeUpdateFailedCount.Inc()
