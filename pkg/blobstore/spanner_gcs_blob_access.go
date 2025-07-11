@@ -626,7 +626,11 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 
 		// One worker gets to handle evictions.  Handle multiple clusters sharing the same set of tables by
 		// including the node name in the serviceId used in leader election.
-		if len(s) > 0 && s[0] == "worker" {
+		// TODO(ragost): need to parameterize this somehow to make it easier to upstream
+		//if len(s) > 0 && s[0] == "worker" {
+		//	go ba.periodicEvicter()
+		//}
+		if len(s) > 3 && s[1] == "workers" && s[3] == "nodocker" {
 			go ba.periodicEvicter()
 		}
 	}
