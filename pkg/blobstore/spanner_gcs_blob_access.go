@@ -876,7 +876,7 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 	// Now insert into the spanners no matter what!
 	rec := spannerRecord{
 		Key:           key,
-		ReferenceTime: now,
+		ReferenceTime: now.Truncate(time.Second),
 		InlineData:    inlineData,
 	}
 
