@@ -770,22 +770,43 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 				backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 				keysToTouch := make([]string, 0, 128)
 				i := 0
-				iter.Do(func(row *spanner.Row) error {
-					i++
+				//iter.Do(func(row *spanner.Row) error {
+				//	i++
+				//	var dkey string
+				//	err := row.Column(0, &dkey)
+				//	if err != nil {
+				//		// TODO(ragost): check for this message in the GCP logs -- NOT seen
+				//		log.Printf("ERROR Column 0 wanted Key, got %v", err)
+				//		// return err
+				//	}
+				//	log.Printf("row %d, read key %s", i, dkey)
+				//	if dkey != "" {
+				//		keysToTouch = append(keysToTouch, dkey)
+				//		log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
+				//	}
+				//	return nil
+				//})
+				for {
 					var dkey string
-					err := row.Column(0, &dkey)
+					row, err := iter.Next()
+					if err == iterator.Done {
+						log.Printf("iterator done")
+						break
+					}
+					i++
 					if err != nil {
-						// TODO(ragost): check for this message in the GCP logs -- NOT seen
-						log.Printf("ERROR Column 0 wanted Key, got %v", err)
-						// return err
+						log.Printf("queryLeader iterator error %v", err)
+					}
+					err = row.Column(0, &dkey)
+					if err != nil {
+						log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
 					}
 					log.Printf("row %d, read key %s", i, dkey)
 					if dkey != "" {
 						keysToTouch = append(keysToTouch, dkey)
 						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
 					}
-					return nil
-				})
+				}
 				log.Printf("rows scanned = %d",i)
 				// TODO(ragost): Monitor this to see if len is ever 0
 				log.Printf("len(keysToTouch) is %d", len(keysToTouch))
