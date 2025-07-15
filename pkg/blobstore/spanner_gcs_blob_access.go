@@ -759,8 +759,9 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 
 			// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
 			go func() {
+				ctx := context.Background()
 				keys := []string{key}
-				go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
+				go ba.touchSpannerObjects(ctx, tableName, keys, now)
 
 				stmt := spanner.NewStatement(`SELECT DigestKey FROM ` + assocTableName + ` WHERE ActionKey = @key`)
 				stmt.Params["key"] = key
@@ -795,7 +796,8 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					}
 					i++
 					if err != nil {
-						log.Printf("queryLeader iterator error %v", err)
+						log.Printf("ERROR: query iterator row %d, got %v", i, err)
+						break
 					}
 					err = row.Column(0, &dkey)
 					if err != nil {
@@ -807,7 +809,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
 					}
 				}
-				log.Printf("rows scanned = %d",i)
+				log.Printf("rows scanned = %d", i)
 				// TODO(ragost): Monitor this to see if len is ever 0
 				log.Printf("len(keysToTouch) is %d", len(keysToTouch))
 				if len(keysToTouch) != 0 {
