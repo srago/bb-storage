@@ -622,7 +622,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
 	} else {
-		match, err := regexp.Match(evictionHostnameRegex, []byte(id));
+		match, err := regexp.Match(evictionHostnameRegex, []byte(id))
 		// One pod gets to handle evictions.  Handle multiple clusters sharing the same set of tables by
 		// including the node name in the serviceId used in leader election.
 		if err == nil && match {
@@ -995,11 +995,13 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 			keysToTouch = append(keysToTouch, key)
 			log.Printf("FindMissing, touch blob %s to %s", key, now)
 		}
+		log.Printf("FindMissing: found digest key %s", key)
 		delete(keyToDigest, key)
 	}
 
 	// Now keyToDigest consists only of missing blobs.  Prepare the missing digest set to return to the caller.
-	for _, digest := range keyToDigest {
+	for k, digest := range keyToDigest {
+		log.Printf("FindMissing: did not find digest key %s", k)
 		missing.Add(digest)
 	}
 
