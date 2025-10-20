@@ -369,10 +369,16 @@ message SpannerGCSBlobAccessConfiguration {
   // before being evicted.  Default is 7 days.
   google.protobuf.Duration expiration_time = 3;
 
+  // Eviction leader election interval.
+  google.protobuf.Duration eviction_election_interval = 4;
+
+  // Regular expression for determining the pod hostnames that participate in eviction .
+  string eviction_hostname_regex = 5;
+
   // Optional: Google Cloud Platform (GCP) client options for objects
   // loaded from GCS
   buildbarn.configuration.cloud.gcp.ClientOptionsConfiguration
-      gcp_client_options = 4;
+      gcp_client_options = 6;
 }
 
 // LocalBlobAccess stores all data onto disk in block sizes. A block

@@ -377,7 +377,7 @@ func (nc *simpleNestedBlobAccessCreator) newNestedBlobAccessBare(configuration *
 			}
 		}
 
-		var expirationTime time.Duration
+		var expirationTime, evictionElectionInterval time.Duration
 		exp := backend.SpannerGcs.ExpirationTime
 		if exp != nil {
 			if err := exp.CheckValid(); err != nil {
@@ -385,12 +385,21 @@ func (nc *simpleNestedBlobAccessCreator) newNestedBlobAccessBare(configuration *
 			}
 			expirationTime = exp.AsDuration()
 		}
+		interval := backend.SpannerGcs.EvictionElectionInterval
+		if interval != nil {
+			if err := interval.CheckValid(); err != nil {
+				return BlobAccessInfo{}, "", util.StatusWrap(err, "Failed to parse evicitonElectionInterval")
+			}
+			evictionElectionInterval = interval.AsDuration()
+		}
 		blobAccess, err := blobstore.NewSpannerGCSBlobAccess(
 			backend.SpannerGcs.SpannerDbName,
 			backend.SpannerGcs.GcsBucketName,
 			readBufferFactory,
 			storageTypeName,
 			expirationTime,
+			evictionElectionInterval,
+			backend.SpannerGcs.EvictionHostnameRegex,
 			creator.GetDefaultCapabilitiesProvider(),
 			clientOptions)
 		if err != nil {

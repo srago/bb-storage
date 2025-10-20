@@ -43,6 +43,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,11 +82,11 @@ const (
 	leaderTableName         = "Leader_v1_0"
 	evicterSemId            = 1
 	leaderTimeout		= 60 * 60 // 1 hour in seconds (eviction only runs once a day, so this is big enough to not waste too many cycles)
-	leaderCheckInterval     = 30 * 60 // check every 30 minutes (also in seconds)
 	defaultDaysToLive       = 14
 	nsecsPerSec       int64	= 1000000000
 	nsecsPerDay       int64 = nsecsPerSec * 60 * 60 * 24
 
+	defaultEvictionElectionInterval = 30 * 60 // 30 minutes
 
 
 	// Labels for backend metrics
@@ -328,17 +329,15 @@ func createSpannerTables(ctx context.Context, spannerClient *spanner.Client, dat
 	if !tableExists(ctx, spannerClient, acTableName) {
 		// Table might not exist.  Try to create it.
 		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
-		s1 := `CREATE TABLE ` + acTableName + ` (
+		s := `CREATE TABLE ` + acTableName + ` (
 			Key STRING(MAX),
 			ReferenceTime TIMESTAMP NOT NULL,
 			InlineData BYTES(MAX),
 		) PRIMARY KEY(Key)`
-		s2 := `CREATE INDEX ACRefTimeIdx ON ` + acTableName + ` (ReferenceTime)`
 		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 			Database: databaseName,
 			Statements: []string{
-				s1,
-				s2,
+				s,
 			},
 		})
 		if err == nil {
@@ -356,17 +355,15 @@ func createSpannerTables(ctx context.Context, spannerClient *spanner.Client, dat
 	if !tableExists(ctx, spannerClient, casTableName) {
 		// Table might not exist.  Try to create it.
 		// NB: stay away from "CREATE TABLE IF NOT EXISTS" command because it is wicked slow
-		s1 := `CREATE TABLE ` + casTableName + ` (
+		s := `CREATE TABLE ` + casTableName + ` (
 			Key STRING(MAX),
 			ReferenceTime TIMESTAMP NOT NULL,
 			InlineData BYTES(MAX),
 		) PRIMARY KEY(Key)`
-		s2 := `CREATE INDEX CASRefTimeIdx ON ` + casTableName + ` (ReferenceTime)`
 		op, err := cl.UpdateDatabaseDdl(ctx, &dbpb.UpdateDatabaseDdlRequest{
 			Database: databaseName,
 			Statements: []string{
-				s1,
-				s2,
+				s,
 			},
 		})
 		if err == nil {
@@ -505,7 +502,10 @@ func roundUpToDay(d time.Duration) time.Duration {
 }
 
 // NewSpannerGCSBlobAccess creates a BlobAccess that uses Spanner and GCS as its backing store.
-func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBufferFactory ReadBufferFactory, storageType string, expirationTime time.Duration, capabilitiesProvider capabilities.Provider, clientOpts []option.ClientOption) (BlobAccess, error) {
+func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBufferFactory ReadBufferFactory, storageType string, expirationTime time.Duration,
+	evictionElectionInterval time.Duration, evictionHostnameRegex string, capabilitiesProvider capabilities.Provider,
+	clientOpts []option.ClientOption) (BlobAccess, error) {
+
 	storageType = strings.ToUpper(storageType)
 
 	// If expirationTime is zero, use the default.  Otherwise round it up to
@@ -622,16 +622,15 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	if storageType == "CAS" {
 		spannerGCSCAS = ba
 	} else {
-		s := strings.Split(id, "-")
-
-		// One worker gets to handle evictions.  Handle multiple clusters sharing the same set of tables by
+		match, err := regexp.Match(evictionHostnameRegex, []byte(id));
+		// One pod gets to handle evictions.  Handle multiple clusters sharing the same set of tables by
 		// including the node name in the serviceId used in leader election.
-		// TODO(ragost): need to parameterize this somehow to make it easier to upstream
-		//if len(s) > 0 && s[0] == "worker" {
-		//	go ba.periodicEvicter()
-		//}
-		if len(s) > 3 && s[1] == "workers" && s[3] == "nodocker" {
-			go ba.periodicEvicter()
+		if err == nil && match {
+			if evictionElectionInterval == time.Duration(0) {
+				evictionElectionInterval =  time.Duration(defaultEvictionElectionInterval) * time.Second
+			}
+			electionInterval := uint64(evictionElectionInterval / time.Duration(nsecsPerSec))
+			go ba.periodicEvicter(electionInterval)
 		}
 	}
 	return ba, nil
@@ -802,11 +801,12 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					err = row.Column(0, &dkey)
 					if err != nil {
 						log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
-					}
-					log.Printf("row %d, read key %s", i, dkey)
-					if dkey != "" {
-						keysToTouch = append(keysToTouch, dkey)
-						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
+					} else {
+						log.Printf("row %d, read key %s", i, dkey)
+						if dkey != "" {
+							keysToTouch = append(keysToTouch, dkey)
+							log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
+						}
 					}
 				}
 				log.Printf("rows scanned = %d", i)
@@ -967,30 +967,35 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 	missing := digest.NewSetBuilder()
 	keysToTouch := make([]string, 0, digests.Length())
 	now := time.Now().UTC()
-	err := iter.Do(func(row *spanner.Row) error {
+	i := 0
+	for {
 		var key string
 		var refTime time.Time
-		err := row.Column(0, &key)
-		if err != nil {
-			log.Printf("ERROR Column 0 wanted Key, got %v", err)
+		row, err := iter.Next()  // Don't return errors from this scope -- let bazel re-upload the blobs as if they were missing
+		if err == iterator.Done {
+			log.Printf("iterator done")
+			break
 		}
-		if key == "" {
-			return nil
+		i++
+		if err != nil {
+			log.Printf("ERROR: query iterator row %d, got %v", i, err)
+			break
+		}
+		err = row.Column(0, &key)
+		if err != nil {
+			log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
+			continue
 		}
 		err = row.Column(1, &refTime)
 		if err != nil {
 			log.Printf("ERROR Column 1 wanted ReferenceTime, got %v", err)
+			continue
 		}
-		if now.After(refTime.Add(ba.refUpdateThresh)) {
+		if key != "" && now.After(refTime.Add(ba.refUpdateThresh)) {
 			keysToTouch = append(keysToTouch, key)
 			log.Printf("FindMissing, touch blob %s to %s", key, now)
 		}
 		delete(keyToDigest, key)
-		return nil
-	})
-
-	if err != nil {
-		return digest.EmptySet, err
 	}
 
 	// Now keyToDigest consists only of missing blobs.  Prepare the missing digest set to return to the caller.
@@ -1102,19 +1107,23 @@ func (ba *spannerGCSBlobAccess) isCoveredByAction(ctx context.Context, key strin
 	return covered
 }
 
-func (ba *spannerGCSBlobAccess) periodicEvicter() {
+//
+// Periodically do leader election.  Every 24 hours (ish) the leader will evict stale AC entries and CAS blobs.
+// Note that election interval is in seconds.
+//
+func (ba *spannerGCSBlobAccess) periodicEvicter(electionInterval uint64) {
 	log.Printf("serviceId is %s", ba.serviceId)
 	err := tryLeaderElection(context.Background(), ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
 	if err != nil {
 		log.Printf("Eviction: leader election failed: %v", err)
 	}
-	t1 := time.NewTimer(leaderCheckInterval * time.Second)  // leader election frequency
-	t2 := time.NewTimer(((2 * leaderCheckInterval) + 300) * time.Second)  // time before first check for evictions, allows for leader election to complete after pod deployment
+	t1 := time.NewTimer(time.Duration(electionInterval) * time.Second)  // leader election frequency
+	t2 := time.NewTimer(time.Duration((2 * electionInterval) + 300) * time.Second)  // time before first check for evictions, allows for leader election to complete after pod deployment
 	for {
 		select {
 		case <-t1.C:
 			t1.Stop()
-			t1 = time.NewTimer(leaderCheckInterval * time.Second)
+			t1 = time.NewTimer(time.Duration(electionInterval) * time.Second)
 			err := tryLeaderElection(context.Background(), ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
 			if err != nil {
 				log.Printf("Eviction: leader election failed: %v", err)
@@ -1210,20 +1219,31 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 	defer iter.Stop()
 
 	keys := make([]string, 0, 1000)
-	err = iter.Do(func(row *spanner.Row) error {
+	i := 0
+	for {
 		// Errors in this function (interpretting the row results) should only occur if someone changes the
 		// schema without updating this file.
 		var key string
-		err := row.Column(0, &key)
+		row, err := iter.Next()
+		if err == iterator.Done {
+			log.Printf("iterator done")
+			break
+		}
+		i++
 		if err != nil {
-			log.Printf("ERROR Column 0 wanted Key, got %v", err)
+			log.Printf("ERROR: query iterator row %d, got %v", i, err)
+			continue
 		}
-		if key == "" {
-			return nil
+		err = row.Column(0, &key)
+		if err != nil {
+			log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
+		} else {
+			log.Printf("row %d, read key %s", i, key)
+			if key != "" {
+				keys = append(keys, key)
+			}
 		}
-		keys = append(keys, key)
-		return nil
-	})
+	}
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 
 	if err != nil {
@@ -1262,21 +1282,29 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 	stmt.Params["keys"] = keys
 	iter = ba.spannerClient.Single().Query(ctx, stmt)
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-	err = iter.Do(func(row *spanner.Row) error {
+	i = 0
+	for {
 		var key string
-		err := row.Column(0, &key)
+		row, err := iter.Next()
+		if err == iterator.Done {
+			log.Printf("iterator done")
+			break
+		}
+		i++
 		if err != nil {
-			log.Printf("ERROR Column 0 wanted Key, got %v", err)
+			log.Printf("ERROR: query iterator row %d, got %v", i, err)
+			continue
 		}
-		if key == "" {
-			return nil
+		err = row.Column(0, &key)
+		if err != nil {
+			log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
+		} else if key != "" {
+			log.Printf("Raced with deleting large CAS blob, key %s; not deleting it from GCS", key)
+			keys = slices.DeleteFunc(keys, func(s string) bool {
+				return s == key
+			})
 		}
-		log.Printf("Raced with deleting large CAS blob, key %s; not deleting it from GCS", key)
-		keys = slices.DeleteFunc(keys, func(s string) bool {
-			return s == key
-		})
-		return nil
-	})
+	}
 
 	if len(keys) == 0 {
 		log.Printf("Evicted 0 large blobs from the CAS after accounting for races")
@@ -1495,7 +1523,7 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	defer iter.Stop()
 	rowCount := 0
 	var serviceId string
-	var err error
+	var err error  // TODO(ragost): clean this scope up
 	for {
 		row, err := iter.Next()
 		if err == iterator.Done {
@@ -1525,7 +1553,7 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		defer iter.Stop()
 		log.Printf("query rowcount = %d", iter.RowCount)
 		rowCount = 0
-		var serviceId string
+		var serviceId string  // use this a scratch variable to prevent it being returned to the caller?
 		var activityTs time.Time
 		for {
 			row, err := iter.Next()
@@ -1535,6 +1563,7 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 			}
 			if err != nil {
 				log.Printf("queryLeader iterator error %v", err)
+				break
 			}
 			rowCount++
 			err = row.Column(1, &serviceId)
