@@ -697,7 +697,11 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	}
 
 	// Exclude expired blobs -- they don't exist anymore; we're waiting for the eviction background thread to delete them.
-// TODO(ragost): need to ensure that CAS blob doesn't expire while still referenced by an AC entry, otherwise this could fail prematurely
+	//
+	// When we update the reference time of an AC entry, we also update the referencetime of all CAS blobs for which it has
+	// foreign key references.  This maintains the invariant that a CAS blob's reference time is always >= to the reference
+	// times of all AC entries that reference the blob.  Thus, if the blob is expired, there should be no AC entries that
+	// refer to it.
 	if !now.Before(s.ReferenceTime.Add(ba.expirationAge)) {
 		spannerExpiredBlobReadIgnoredCount.Inc()
 		return buffer.NewBufferFromError(status.Error(codes.NotFound, "Blob not found"))
@@ -753,9 +757,6 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 	}
 	if now.After(s.ReferenceTime.Add(ba.refUpdateThresh)) {
 		if ba.storageType == "AC" {
-			// TODO(ragost): check for this message in the GCP logs -- YES, the frontends register this
-			log.Printf("GET: scheduling touch reftime for key %s reftime %s now %s", key, s.ReferenceTime, now)
-
 			// Update the ReferenceTime of the AC entry and of all CAS blobs this AC entry refers to.
 			go func() {
 				ctx := context.Background()
@@ -775,9 +776,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 				//	var dkey string
 				//	err := row.Column(0, &dkey)
 				//	if err != nil {
-				//		// TODO(ragost): check for this message in the GCP logs -- NOT seen
 				//		log.Printf("ERROR Column 0 wanted Key, got %v", err)
-				//		// return err
 				//	}
 				//	log.Printf("row %d, read key %s", i, dkey)
 				//	if dkey != "" {
@@ -790,7 +789,6 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					var dkey string
 					row, err := iter.Next()
 					if err == iterator.Done {
-						log.Printf("iterator done")
 						break
 					}
 					i++
@@ -801,12 +799,9 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 					err = row.Column(0, &dkey)
 					if err != nil {
 						log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
-					} else {
-						log.Printf("row %d, read key %s", i, dkey)
-						if dkey != "" {
-							keysToTouch = append(keysToTouch, dkey)
-							log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
-						}
+					} else if dkey != "" {
+						keysToTouch = append(keysToTouch, dkey)
+						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
 					}
 				}
 				log.Printf("rows scanned = %d", i)
@@ -847,14 +842,12 @@ func (ba *spannerGCSBlobAccess) Put(ctx context.Context, digest digest.Digest, b
 		actionResult, err := b1.ToProto(&remoteexecution.ActionResult{}, maxMsgSz)
 		if err != nil {
 			b2.Discard()
-			// TODO(ragost): check for this message in the GCP logs
 			return util.StatusWrap(err, "Can't convert ActionResult")
 		}
 
 		digestKeys, err = ba.getDigestKeysFromActionResult(ctx, digest.GetDigestFunction(), actionResult.(*remoteexecution.ActionResult))
 		if err != nil {
 			b2.Discard()
-			// TODO(ragost): check for this message in the GCP logs
 			return util.StatusWrap(err, "Can't get dependent blobs from ActionResult")
 		}
 		b = b2
@@ -973,7 +966,6 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		var refTime time.Time
 		row, err := iter.Next()  // Don't return errors from this scope -- let bazel re-upload the blobs as if they were missing
 		if err == iterator.Done {
-			log.Printf("iterator done")
 			break
 		}
 		i++
@@ -993,15 +985,12 @@ func (ba *spannerGCSBlobAccess) FindMissing(ctx context.Context, digests digest.
 		}
 		if key != "" && now.After(refTime.Add(ba.refUpdateThresh)) {
 			keysToTouch = append(keysToTouch, key)
-			log.Printf("FindMissing, touch blob %s to %s", key, now)
 		}
-		log.Printf("FindMissing: found digest key %s", key)
 		delete(keyToDigest, key)
 	}
 
 	// Now keyToDigest consists only of missing blobs.  Prepare the missing digest set to return to the caller.
-	for k, digest := range keyToDigest {
-		log.Printf("FindMissing: did not find digest key %s", k)
+	for _, digest := range keyToDigest {
 		missing.Add(digest)
 	}
 
@@ -1228,7 +1217,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		var key string
 		row, err := iter.Next()
 		if err == iterator.Done {
-			log.Printf("iterator done")
 			break
 		}
 		i++
@@ -1239,11 +1227,8 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		err = row.Column(0, &key)
 		if err != nil {
 			log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
-		} else {
-			log.Printf("row %d, read key %s", i, key)
-			if key != "" {
-				keys = append(keys, key)
-			}
+		} else if key != "" {
+			keys = append(keys, key)
 		}
 	}
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
@@ -1289,7 +1274,6 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		var key string
 		row, err := iter.Next()
 		if err == iterator.Done {
-			log.Printf("iterator done")
 			break
 		}
 		i++
@@ -1545,7 +1529,6 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 			log.Printf("row %d: no serviceId found in leader table", rowCount)
 		}
 	}
-	log.Printf("rowcount = %d", rowCount)
 	if rowCount == 0 {
 		log.Printf("WARNING: didn't find any matching rows in leader table")
 		// TODO(ragost): redo the query to get the ActivityTimestamp and log that
@@ -1555,12 +1538,11 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		defer iter.Stop()
 		log.Printf("query rowcount = %d", iter.RowCount)
 		rowCount = 0
-		var serviceId string  // use this a scratch variable to prevent it being returned to the caller?
+		var serviceId string  // use this scratch variable to prevent it being returned to the caller
 		var activityTs time.Time
 		for {
 			row, err := iter.Next()
 			if err == iterator.Done {
-				log.Printf("iterator done")
 				break
 			}
 			if err != nil {
