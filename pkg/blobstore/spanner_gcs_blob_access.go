@@ -1449,11 +1449,12 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	defer iter.Stop()
 	rowCount := 0
 	var serviceId string
-	var err error  // TODO(ragost): clean this scope up
+	var err error
 	var row *spanner.Row
 	for {
 		row, err = iter.Next()
 		if err == iterator.Done {
+			err = nil
 			break
 		}
 		if err != nil {
@@ -1483,6 +1484,7 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		for {
 			row, err = iter.Next()
 			if err == iterator.Done {
+				err = nil
 				break
 			}
 			if err != nil {
