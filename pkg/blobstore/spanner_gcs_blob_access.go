@@ -229,20 +229,12 @@ var (
 			Name:      "gcs_put_failed_other_total",
 			Help:      "Number of failed puts of GCS blobs because of other reasons",
 		})
-	spannerMalformedBlobDeletedCount = prometheus.NewCounterVec(
+	spannerMalformedBlobReadCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "buildbarn",
 			Subsystem: "blobstore",
 			Name:      "spanner_malformed_blob_deleted_total",
 			Help:      "Number of malformed blobs that were deleted",
-		},
-		[]string{"backend_type"})
-	spannerMalformedBlobDeleteFailedCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "buildbarn",
-			Subsystem: "blobstore",
-			Name:      "spanner_malformed_blob_delete_failed_total",
-			Help:      "Number of malformed blobs that could not be deleted",
 		},
 		[]string{"backend_type"})
 	backendOperationsDurationSeconds = prometheus.NewHistogramVec(
@@ -526,8 +518,7 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		prometheus.MustRegister(gcsReftimeUpdateFailedCount)
 		prometheus.MustRegister(spannerReftimeUpdateCount)
 		prometheus.MustRegister(spannerReftimeUpdateFailedCount)
-		prometheus.MustRegister(spannerMalformedBlobDeletedCount)
-		prometheus.MustRegister(spannerMalformedBlobDeleteFailedCount)
+		prometheus.MustRegister(spannerMalformedBlobReadCount)
 		prometheus.MustRegister(spannerExpiredBlobReadIgnoredCount)
 		prometheus.MustRegister(spannerDeleteActionCount)
 		prometheus.MustRegister(spannerDeleteActionFailedCount)
@@ -636,28 +627,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	return ba, nil
 }
 
-// TODO(ragost): we need to remove foreign keys pointing to this before we can delete it, but wouldn't that break bazel?
-func (ba *spannerGCSBlobAccess) delete(ctx context.Context, tableName string, key string, loc int) error {
-	deleteMut := spanner.Delete(tableName, spanner.Key{key})
-	start := time.Now()
-	_, err := ba.spannerClient.Apply(ctx, []*spanner.Mutation{deleteMut})
-	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-	if err != nil {
-		return err
-	}
-
-	// Now if it was also in GCS, delete it there
-	if (loc & LOC_GCS) != 0 {
-		object := ba.gcsBucket.Object(key)
-		start := time.Now()
-		err = object.Delete(ctx)
-		backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_GCS, BE_DEL).Observe(time.Now().Sub(start).Seconds())
-		return err
-	}
-
-	return nil
-}
-
 func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) buffer.Buffer {
 	if err := util.StatusFromContext(ctx); err != nil {
 		return buffer.NewBufferFromError(err)
@@ -715,11 +684,7 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 			} else {
 				beType = BE_SPANNER
 			}
-			if err := ba.delete(ctx, tableName, key, loc); err == nil {
-				spannerMalformedBlobDeletedCount.WithLabelValues(beType).Inc()
-			} else {
-				spannerMalformedBlobDeleteFailedCount.WithLabelValues(beType).Inc()
-			}
+			spannerMalformedBlobReadCount.WithLabelValues(beType).Inc()
 		}
 	}
 
@@ -730,12 +695,6 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 
 		r, err := obj.NewReader(ctx)
 		if err != nil {
-			// If we couldn't read the bucket, then let's delete it from spanner (and from gcs if we can!)
-			if err2 := ba.delete(ctx, tableName, key, loc); err2 == nil {
-				gcsFailedReadDeletedBlobCount.Inc()
-			} else {
-				gcsFailedReadDeleteBlobFailedCount.Inc()
-			}
 			return buffer.NewBufferFromError(err)
 		}
 		b = ba.readBufferFactory.NewBufferFromReader(digest, r, validationFunc)
@@ -771,20 +730,6 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 				backendOperationsDurationSeconds.WithLabelValues("CAS", BE_SPANNER, BE_TOUCH).Observe(time.Now().Sub(start).Seconds())
 				keysToTouch := make([]string, 0, 128)
 				i := 0
-				//iter.Do(func(row *spanner.Row) error {
-				//	i++
-				//	var dkey string
-				//	err := row.Column(0, &dkey)
-				//	if err != nil {
-				//		log.Printf("ERROR Column 0 wanted Key, got %v", err)
-				//	}
-				//	log.Printf("row %d, read key %s", i, dkey)
-				//	if dkey != "" {
-				//		keysToTouch = append(keysToTouch, dkey)
-				//		log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
-				//	}
-				//	return nil
-				//})
 				for {
 					var dkey string
 					row, err := iter.Next()
@@ -801,18 +746,13 @@ func (ba *spannerGCSBlobAccess) Get(ctx context.Context, digest digest.Digest) b
 						log.Printf("ERROR: row %d, column 0 wanted Key, got %v", i, err)
 					} else if dkey != "" {
 						keysToTouch = append(keysToTouch, dkey)
-						log.Printf("get AC, touch referenced blob %s to %s", dkey, now)
 					}
 				}
-				log.Printf("rows scanned = %d", i)
-				// TODO(ragost): Monitor this to see if len is ever 0
-				log.Printf("len(keysToTouch) is %d", len(keysToTouch))
 				if len(keysToTouch) != 0 {
 					go spannerGCSCAS.touchSpannerObjects(context.Background(), casTableName, keysToTouch, now)
 				}
 			}()
 		} else if !ba.isCoveredByAction(ctx, key) {
-			log.Printf("get CAS, touch blob %s to %s", key, now)
 			keys := []string{key}
 			go ba.touchSpannerObjects(context.Background(), tableName, keys, now)
 		}
@@ -1050,7 +990,6 @@ func (ba *spannerGCSBlobAccess) addAssociationsToSpanner(ctx context.Context, ke
 	assocRecs = make([]assocRecord, len(digestKeys))
 	for idx, _ := range digestKeys {
 		assocRecs[idx].ActionKey = key
-		log.Printf("adding association for %s, will touch to %s", digestKeys[idx], now)
 		assocRecs[idx].DigestKey = digestKeys[idx]
 	}
 	start := time.Now()
@@ -1215,7 +1154,8 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 		// Errors in this function (interpretting the row results) should only occur if someone changes the
 		// schema without updating this file.
 		var key string
-		row, err := iter.Next()
+		var row *spanner.Row
+		row, err = iter.Next()
 		if err == iterator.Done {
 			break
 		}
@@ -1233,7 +1173,7 @@ func (ba *spannerGCSBlobAccess) evictStaleCASBlobs() {
 	}
 	backendOperationsDurationSeconds.WithLabelValues(ba.storageType, BE_SPANNER, BE_DEL).Observe(time.Now().Sub(start).Seconds())
 
-	if err != nil {
+	if err != nil && err != iterator.Done {
 		log.Printf("Can't evict large Blobs: %v", err)
 	}
 
@@ -1510,8 +1450,9 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	rowCount := 0
 	var serviceId string
 	var err error  // TODO(ragost): clean this scope up
+	var row *spanner.Row
 	for {
-		row, err := iter.Next()
+		row, err = iter.Next()
 		if err == iterator.Done {
 			break
 		}
@@ -1531,17 +1472,16 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 	}
 	if rowCount == 0 {
 		log.Printf("WARNING: didn't find any matching rows in leader table")
-		// TODO(ragost): redo the query to get the ActivityTimestamp and log that
+		// Redo the query to get the ActivityTimestamp and log that
 		stmt := spanner.NewStatement(`SELECT * FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
 		stmt.Params["semId"] = semId
 		iter := cl.Single().Query(ctx, stmt)
 		defer iter.Stop()
-		log.Printf("query rowcount = %d", iter.RowCount)
 		rowCount = 0
 		var serviceId string  // use this scratch variable to prevent it being returned to the caller
 		var activityTs time.Time
 		for {
-			row, err := iter.Next()
+			row, err = iter.Next()
 			if err == iterator.Done {
 				break
 			}
@@ -1561,15 +1501,5 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		}
 		log.Printf("rowCount = %d, found ServiceId %s, ActivityTimestamp %s", rowCount, serviceId, activityTs)
 	}
-	//err := iter.Do(func(row *spanner.Row) error {
-	//	err := row.Column(0, &serviceId)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if serviceId == "" {
-	//		log.Printf("no serviceId found in leader table")
-	//	}
-	//	return nil
-	//})
 	return serviceId, err
 }
