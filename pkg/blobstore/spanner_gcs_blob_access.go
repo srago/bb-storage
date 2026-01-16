@@ -1048,7 +1048,7 @@ func (ba *spannerGCSBlobAccess) periodicEvicter(electionInterval uint64) {
 		log.Printf("Eviction: leader election failed: %v", err)
 	}
 	t1 := time.NewTimer(time.Duration(electionInterval) * time.Second)  // leader election frequency
-	t2 := time.NewTimer(time.Duration((2 * electionInterval) + 300) * time.Second)  // time before first check for evictions, allows for leader election to complete after pod deployment
+	t2 := time.NewTimer(time.Duration((2 * electionInterval) + leaderTimeout) * time.Second)  // time before first check for evictions, allows for leader election to complete after pod deployment
 	for {
 		select {
 		case <-t1.C:
@@ -1472,8 +1472,8 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 		}
 	}
 	if rowCount == 0 {
-		log.Printf("WARNING: didn't find any matching rows in leader table")
-		// Redo the query to get the ActivityTimestamp and log that
+		log.Printf("WARNING: didn't find an active leader in table")
+		// Redo the query to get the ActivityTimestamp and log it
 		stmt := spanner.NewStatement(`SELECT * FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId`)
 		stmt.Params["semId"] = semId
 		iter := cl.Single().Query(ctx, stmt)
