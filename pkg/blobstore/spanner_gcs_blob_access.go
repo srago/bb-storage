@@ -510,7 +510,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 	}
 	expirationTime = time.Duration(daysToLive * uint64(nsecsPerDay))
 	// The reference time update threshold is half of the expiration age
-	log.Printf("daysToLive = %d, expirationTime = %d\n", daysToLive, expirationTime)
 
 	spannerGCSBlobAccessPrometheusMetrics.Do(func() {
 		prometheus.MustRegister(spannerMalformedKeyCount)
@@ -592,8 +591,6 @@ func NewSpannerGCSBlobAccess(databaseName string, gcsBucketName string, readBuff
 		storageClient.Close()
 		return nil, util.StatusWrap(err, "Can't access GCS bucket")
 	}
-
-	log.Printf("NewSpannerGCSBlobAccess type %s", storageType)
 
 	node := os.Getenv("NODE_NAME")
 	id := os.Getenv("HOSTNAME")
@@ -1042,7 +1039,6 @@ func (ba *spannerGCSBlobAccess) isCoveredByAction(ctx context.Context, key strin
 // Note that election interval is in seconds.
 //
 func (ba *spannerGCSBlobAccess) periodicEvicter(electionInterval uint64) {
-	log.Printf("serviceId is %s", ba.serviceId)
 	err := tryLeaderElection(context.Background(), ba.spannerClient, evicterSemId, ba.serviceId, leaderTimeout)
 	if err != nil {
 		log.Printf("Eviction: leader election failed: %v", err)
@@ -1419,7 +1415,6 @@ func (dk *digestKeys) add(blobDigest *remoteexecution.Digest) error {
 func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, serviceId string, timeoutSecs int) error {
 	//spannerReftimeUpdateCount.Inc()
 	//start := time.Now()
-	log.Printf("tryLeaderElection semId %d, serviceId %s timeoutSecs %d", semId, serviceId, timeoutSecs)
 	_, err := cl.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.NewStatement(`UPDATE ` + leaderTableName + ` SET ServiceID = @serviceId, ActivityTimestamp = CURRENT_TIMESTAMP()
 			WHERE SemaphoreId = @semId AND
@@ -1441,7 +1436,6 @@ func tryLeaderElection(ctx context.Context, cl *spanner.Client, semId int64, ser
 }
 
 func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSecs int) (string, error) {
-	log.Printf("queryLeader semId %d timeoutSecs %d", semId, timeoutSecs)
 	stmt := spanner.NewStatement(`SELECT ServiceId FROM ` + leaderTableName + ` WHERE SemaphoreId = @semId AND ActivityTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @timeout SECOND)`)
 	stmt.Params["semId"] = semId
 	stmt.Params["timeout"] = timeoutSecs
@@ -1501,7 +1495,6 @@ func queryLeader(ctx context.Context, cl *spanner.Client, semId int64, timeoutSe
 				log.Printf("ERROR: row %d, column 2 wanted ActivityTimestamp, got %v", rowCount, err)
 			}
 		}
-		log.Printf("rowCount = %d, found ServiceId %s, ActivityTimestamp %s", rowCount, serviceId, activityTs)
 	}
 	return serviceId, err
 }

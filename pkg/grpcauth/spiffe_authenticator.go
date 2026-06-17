@@ -74,12 +74,10 @@ func (a *mtlsPeerCertificateAuthenticator) verifyPeer(certs []*x509.Certificate,
 	for _, cert := range certs[1:] {
 		opts.Intermediates.AddCert(cert)
 	}
-	log.Printf("verifyPeer: currentTime %v cert not before %v not after %v\n", opts.CurrentTime, certs[0].NotBefore, certs[0].NotAfter)
 	if _, err := certs[0].Verify(opts); err != nil {
 		log.Printf("verifyPeer: Verify failed: %v\n", err)
 		return util.StatusWrapWithCode(err, codes.Unauthenticated, "Cannot validate TLS certificate")
 	}
-	log.Printf("verifyPeer: Verify succeeded\n")
 	if a.allowedSubjects != nil {
 		id, err := x509svid.IDFromCert(certs[0])
 		if err != nil {
@@ -119,13 +117,11 @@ func (a *mtlsPeerCertificateAuthenticator) Authenticate(ctx context.Context) (co
 	if len(certs) == 0 {
 		return nil, status.Error(codes.Unauthenticated, "Peer provided no TLS certificate")
 	}
-	// log.Printf("Authenticate: extracting certs from context; certs[0] = %#v\n", certs[0])
 	err := a.verifyPeer(certs, x509.ExtKeyUsageClientAuth)
 	if err != nil {
 		log.Printf("Authenticate: verifyPeer failed: %v\n", err)
 		return nil, err
 	}
-	log.Printf("Authenticate: success!\n")
 	return ctx, nil
 }
 
@@ -167,16 +163,15 @@ func (a *mtlsPeerCertificateAuthenticator) GetVerifyCertificate(usage x509.ExtKe
 			}
 			certs = append(certs, cert)
 		}
-		if len(certs) != 0 {
-			log.Printf("MTLS Serial Number = %s Not Before %v Not After %v\n", certs[0].SerialNumber.String(), certs[0].NotBefore, certs[0].NotAfter)
-		}
 		err := a.verifyPeer(certs, usage)
-		if usage == x509.ExtKeyUsageClientAuth {
-			log.Printf("MTLS: client auth ret %v\n", err)
-		} else if usage == x509.ExtKeyUsageServerAuth {
-			log.Printf("MTLS: server auth ret %v\n", err)
-		} else {
-			log.Printf("MTLS: UNKNOWN auth ret %v\n", err)
+		if err != nil {
+			if usage == x509.ExtKeyUsageClientAuth {
+				log.Printf("MTLS: client auth ret %v\n", err)
+			} else if usage == x509.ExtKeyUsageServerAuth {
+				log.Printf("MTLS: server auth ret %v\n", err)
+			} else {
+				log.Printf("MTLS: UNKNOWN auth ret %v\n", err)
+			}
 		}
 		return err
 	}

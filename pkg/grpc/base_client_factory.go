@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"crypto/tls"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -107,7 +106,6 @@ func (cf baseClientFactory) NewClientFromConfiguration(config *configuration.Cli
 		tlsConfig, err = bb_tls.NewMTLSConfigFromClientConfiguration(config.Tls)
 	} else {
 		isSpiffe = false
-		log.Printf("calling NewTLSConfigFromClientConfiguration instead of MTLS")
 		tlsConfig, err = bb_tls.NewTLSConfigFromClientConfiguration(config.Tls)
 	}
 	if err != nil {

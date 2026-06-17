@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"sync"
 	"time"
 
@@ -48,14 +47,12 @@ func newSPIFFECertInfo(certFile, keyFile, caCertFile string) (*spiffeCertInfo, e
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("CI: created %p\n", ci)
 	return ci, nil
 }
 
 // NewMTLSConfigFromClientConfiguration creates an mTLS configuration object based on parameters specified in a
 // Protobuf message for use with an mTLS client. This Protobuf message is embedded in Buildbarn configuration files.
 func NewMTLSConfigFromClientConfiguration(configuration *configuration.ClientConfiguration) (*tls.Config, error) {
-	log.Printf("NewMTLSConfigFromClientConfiguration")
 	if configuration == nil {
 		return nil, fmt.Errorf("MTLS configuration is missing")
 	}
@@ -104,7 +101,6 @@ func NewMTLSConfigFromClientConfiguration(configuration *configuration.ClientCon
 // NewMTLSConfigFromServerConfiguration creates an mTLS configuration object based on parameters specified in a
 // Protobuf message for use with an mTLS server. This Protobuf message is embedded in Buildbarn configuration files.
 func NewMTLSConfigFromServerConfiguration(configuration *configuration.ServerConfiguration, authConfig *grpc_cfg.AuthenticationPolicy) (*tls.Config, error) {
-	log.Printf("NewMTLSConfigFromServerConfiguration")
 	if configuration == nil {
 		return nil, fmt.Errorf("MTLS configuration is missing")
 	}
@@ -186,14 +182,12 @@ func (ci *spiffeCertInfo) getClientCertificate(certFile, keyFile, caCertFile str
 	return func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 		ci.mu.Lock()
 		defer ci.mu.Unlock()
-		log.Printf("CI: %p getClientCert not before %v not after %v\n", ci, ci.svid.Certificates[0].NotBefore, ci.svid.Certificates[0].NotAfter)
 		if time.Now().After(ci.svid.Certificates[0].NotAfter.Add(time.Minute * -15)) {
 			// Cert is about to expire.  Some external entity is responsible for rotating Certs.
 			// Reload the new ones.
 			if err := ci.loadNewCerts(certFile, keyFile, caCertFile); err != nil {
 				return nil, status.Errorf(codes.FailedPrecondition, "Can't reload certs: %v\n", err)
 			}
-			log.Printf("CI: %p Reload: getClientCert not before %v not after %v\n", ci, ci.svid.Certificates[0].NotBefore, ci.svid.Certificates[0].NotAfter)
 		}
 		c := ci.getTLSCert()
 		return c, nil
@@ -204,15 +198,12 @@ func (ci *spiffeCertInfo) getCertificate(certFile, keyFile, caCertFile string) f
 	return func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		ci.mu.Lock()
 		defer ci.mu.Unlock()
-		log.Printf("ClientHelloInfo: %#v\n", info)
-		log.Printf("CI: %p getCert not before %v not after %v\n", ci, ci.svid.Certificates[0].NotBefore, ci.svid.Certificates[0].NotAfter)
 		if time.Now().After(ci.svid.Certificates[0].NotAfter.Add(time.Minute * -15)) {
 			// Cert is about to expire.  Some external entity is responsible for rotating Certs.
 			// Reload the new ones.
 			if err := ci.loadNewCerts(certFile, keyFile, caCertFile); err != nil {
 				return nil, status.Errorf(codes.FailedPrecondition, "Can't reload certs: %v\n", err)
 			}
-			log.Printf("CI: %p Reload: getCert not before %v not after %v\n", ci, ci.svid.Certificates[0].NotBefore, ci.svid.Certificates[0].NotAfter)
 		}
 		c := ci.getTLSCert()
 		return c, nil
@@ -252,7 +243,6 @@ func (ci *spiffeCertInfo) loadNewCerts(certFile, keyFile, caCertFile string) err
 		// TODO(ragost): make these strings configurable
 		ci.bundle.Add(bdl, ".svc.id.goog", ".global.workload.id.goog")
 	}
-	log.Printf("CI: %p updated certs\n", ci)
 	return nil
 }
 
@@ -260,11 +250,11 @@ func (ci *spiffeCertInfo) getTLSCert() *tls.Certificate {
 	cert := &tls.Certificate{
 		Certificate: make([][]byte, 0, len(ci.svid.Certificates)),
 		PrivateKey:  ci.svid.PrivateKey,
+		Leaf:        ci.svid.Certificates[0],
 	}
 	for _, c := range ci.svid.Certificates {
 		cert.Certificate = append(cert.Certificate, c.Raw)
 	}
-	log.Printf("CI: %p ret certs\n", ci)
 	return cert
 }
 

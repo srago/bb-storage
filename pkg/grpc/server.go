@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"crypto/tls"
-	"log"
 	"net"
 	"os"
 
@@ -83,7 +82,6 @@ func NewServersFromConfigurationAndServe(configurations []*configuration.ServerC
 				}
 			}
 		} else {
-			log.Printf("calling NewTLSConfigFromServerConfiguration instead of MTLS")
 			if tlsConfig, err = bb_tls.NewTLSConfigFromServerConfiguration(configuration.Tls, requestTLSClientCertificate); err != nil {
 				return err
 			}
