@@ -293,13 +293,13 @@ func tableExists(ctx context.Context, cl *spanner.Client, tableName string) bool
 	iter := cl.Single().Query(ctx, stmt)
 	_, err := iter.Next()
 	iter.Stop()
-	log.Printf("spanner table %s check, err = %v", tableName, err)
 	if err == nil {
 		// Table exists.
 		return true
 	} else {
 		// Either err is iterator.Done or some other error code.  In either case, we
 		// assume that the table doesn't exist so the caller will try to create it.
+		log.Printf("spanner table %s check, err = %v", tableName, err)
 		return false
 	}
 }
